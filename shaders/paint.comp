@@ -1,0 +1,74 @@
+#version 430 core
+
+layout(local_size_x = 64, local_size_y = 1) in;
+
+// Image bindings: these are the GPU-side resources referenced by imageLoad
+// and imageStore. Binding 0 is the active cell grid; binding 1 holds stroke state.
+layout(r32ui, binding = 0) uniform uimage2D cellStates;
+layout(r32ui, binding = 1) uniform uimage2D strokeState;
+
+// The cursor position at the start of this stroke segment.
+uniform ivec2 fromCell;
+// The cursor position at the end of this stroke segment.
+uniform ivec2 toCell;
+// The number of sampled cells to paint on this dispatch.
+uniform uint cellCount;
+// Nonzero only for the first dispatch of a drag.
+uniform uint startStroke;
+// Integer value stored in dead grid cells.
+uniform uint deadState;
+// Integer value stored in alive grid cells.
+uniform uint aliveState;
+
+void main() {
+    // Each invocation gets a unique horizontal index. local_size_x = 64 means
+    // invocations are numbered consecutively within and across workgroups.
+    uint invocation = gl_GlobalInvocationID.x;
+
+    // The first dispatch of a drag decides whether the entire drag paints or
+    // erases. Only invocation zero performs this setup so it happens once.
+    if (startStroke != 0u) {
+        if (invocation != 0u) {
+            return;
+        }
+
+        // Read the initial cell. If it is dead, paint alive; if it is alive,
+        // erase it. This makes one drag act consistently from its first cell.
+        uint currentState = imageLoad(cellStates, toCell).r;
+        uint paintState = currentState == deadState ? aliveState : deadState;
+
+        // Store the chosen state in a shared 1x1 texture. Later invocations
+        // read this texture, so all cells in the drag use the same state.
+        imageStore(strokeState, ivec2(0), uvec4(paintState));
+
+        // Paint or erase the first cell immediately.
+        imageStore(cellStates, toCell, uvec4(paintState));
+        return;
+    }
+
+    // A dispatch may contain 64-invocation workgroups rounded up beyond the
+    // number of actual cells. Those extra invocations have no work to do.
+    if (invocation >= cellCount) {
+        return;
+    }
+
+    // strokeState is shared by all invocations in this dispatch. Each
+    // invocation gets its own local copy of paintState.
+    uint paintState = imageLoad(strokeState, ivec2(0)).r;
+
+    // Distribute invocations evenly between the previous and current cursor cells.
+    // A value of 0 is fromCell, 1 is toCell, and values in between are linearly
+    // interpolated positions. The special case avoids division by zero.
+    float positionAlongStroke = cellCount == 1u
+        ? 0.0
+        : float(invocation) / float(cellCount - 1u);
+
+    // mix() linearly interpolates two vectors. Here, converting each invocation's
+    // position to a grid coordinate and rounding maps it to one integer cell.
+    ivec2 cell = ivec2(round(mix(vec2(fromCell), vec2(toCell), positionAlongStroke)));
+
+    // This invocation writes only its assigned cell. Multiple invocations may
+    // happen concurrently, but a stroke write is expected to target a segment
+    // of distinct grid coordinates.
+    imageStore(cellStates, cell, uvec4(paintState));
+}

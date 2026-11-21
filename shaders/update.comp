@@ -1,0 +1,51 @@
+#version 430 core
+
+// One 16x16 group gives each invocation a two-dimensional grid position.
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Read one generation and write the next into a distinct texture. Keeping
+// current and next separate prevents in-pass writes from affecting neighbors.
+layout(r32ui, binding = 0) readonly uniform uimage2D currentState;
+layout(r32ui, binding = 1) writeonly uniform uimage2D nextState;
+
+// Grid dimensions in columns and rows.
+uniform ivec2 gridSize;
+
+// Integer values used by the two-state Conway simulation.
+uniform uint deadState;
+uniform uint aliveState;
+
+void main() {
+    // gl_GlobalInvocationID identifies this invocation's grid cell.
+    ivec2 cell = ivec2(gl_GlobalInvocationID.xy);
+
+    // Rounded-up dispatch dimensions leave extra invocations around the edges;
+    // ignore any invocation whose cell lies outside the actual grid.
+    if (any(greaterThanEqual(cell, gridSize))) {
+        return;
+    }
+
+    // Count live orthogonal and diagonal neighbors using the Moore neighborhood.
+    uint liveNeighbors = 0u;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            // Skip the center cell because it is not one of its own neighbors.
+            if (x == 0 && y == 0) {
+                continue;
+            }
+
+            ivec2 neighbor = cell + ivec2(x, y);
+            // Off-grid neighbors count as dead.
+            if (all(greaterThanEqual(neighbor, ivec2(0))) &&
+                all(lessThan(neighbor, gridSize)) &&
+                imageLoad(currentState, neighbor).r == aliveState) {
+                ++liveNeighbors;
+            }
+        }
+    }
+
+    bool alive = imageLoad(currentState, cell).r == aliveState;
+    // Conway's rule: birth with three neighbors; survive with two or three.
+    bool nextAlive = liveNeighbors == 3u || (alive && liveNeighbors == 2u);
+    imageStore(nextState, cell, uvec4(nextAlive ? aliveState : deadState));
+}
