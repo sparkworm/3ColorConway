@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -19,11 +20,55 @@ namespace {
 // to the shaders so they can work in grid coordinates instead of pixels.
 constexpr int GridColumns = 256;
 constexpr int GridRows = 192;
+constexpr float MinZoom = 0.5F;
+constexpr float MaxZoom = 8.0F;
+// Multiplicative zoom keeps wheel increments consistent at every zoom level.
+constexpr float ZoomStep = 1.2F;
 // Cell data stays in integer states. Rendering maps only this live state to
 // white and every other state to black.
 constexpr unsigned int DeadState = 0b0000;
 constexpr unsigned int WhiteState = 0b0111;
 constexpr auto SimulationStep = std::chrono::milliseconds(100);
+
+struct Camera {
+    // The camera is centered in grid coordinates so input and rendering share
+    // the same mapping regardless of window size or framebuffer scale.
+    float centerX = GridColumns * 0.5F;
+    float centerY = GridRows * 0.5F;
+    float zoom = 1.0F;
+    // GLFW callbacks run during event polling; accumulate wheel movement here
+    // and apply it in the main loop alongside keyboard input.
+    double scrollDelta = 0.0;
+};
+
+struct ViewSize {
+    float width;
+    float height;
+};
+
+ViewSize getViewSize(int framebufferWidth, int framebufferHeight, float zoom) {
+    // Fit the whole grid without stretching it, then scale the visible
+    // grid-space dimensions inversely with zoom.
+    const float fitScale = std::min(
+        static_cast<float>(framebufferWidth) / GridColumns,
+        static_cast<float>(framebufferHeight) / GridRows);
+    return {
+        static_cast<float>(framebufferWidth) / (fitScale * zoom),
+        static_cast<float>(framebufferHeight) / (fitScale * zoom),
+    };
+}
+
+void clampCamera(Camera& camera) {
+    // Keeping the center within the finite grid guarantees that some part of
+    // the grid remains visible, even when the viewport is larger than it.
+    camera.centerX = std::clamp(camera.centerX, 0.0F, static_cast<float>(GridColumns));
+    camera.centerY = std::clamp(camera.centerY, 0.0F, static_cast<float>(GridRows));
+}
+
+void scrollCallback(GLFWwindow* window, double, double yOffset) {
+    auto* camera = static_cast<Camera*>(glfwGetWindowUserPointer(window));
+    camera->scrollDelta += yOffset;
+}
 
 // Read a shader source file as text. OpenGL's shader functions receive source
 // code as text and do not open files themselves.
@@ -162,6 +207,9 @@ int main() {
 
     // All subsequent OpenGL calls operate on this window's current context.
     glfwMakeContextCurrent(window);
+    Camera camera;
+    glfwSetWindowUserPointer(window, &camera);
+    glfwSetScrollCallback(window, scrollCallback);
     // GLAD finds the OpenGL function pointers exposed by the graphics driver.
     // Calling modern OpenGL functions without loading them this way is invalid.
     if (gladLoadGL(reinterpret_cast<GLADloadfunc>(glfwGetProcAddress)) == 0) {
@@ -225,6 +273,8 @@ int main() {
     glUniform2i(glGetUniformLocation(displayProgram, "gridSize"), GridColumns, GridRows);
     glUniform1i(glGetUniformLocation(displayProgram, "stateTexture"), 0);
     glUniform1ui(glGetUniformLocation(displayProgram, "aliveState"), WhiteState);
+    const GLint viewOriginLocation = glGetUniformLocation(displayProgram, "viewOrigin");
+    const GLint viewSizeLocation = glGetUniformLocation(displayProgram, "viewSize");
 
     // These variables track input transitions and the previous mouse position.
     // wasMouseDown detects a press; haveLastCell prevents a new stroke segment
@@ -235,8 +285,11 @@ int main() {
     int lastColumn = 0;
     int lastRow = 0;
     bool spaceWasDown = false;
+    bool zoomInWasDown = false;
+    bool zoomOutWasDown = false;
     bool paused = false;
     auto nextUpdate = std::chrono::steady_clock::now() + SimulationStep;
+    auto lastFrame = std::chrono::steady_clock::now();
 
     // Cache uniform locations used on every paint dispatch.
     const GLint fromCellLocation = glGetUniformLocation(paintProgram, "fromCell");
@@ -244,13 +297,66 @@ int main() {
     const GLint cellCountLocation = glGetUniformLocation(paintProgram, "cellCount");
     const GLint startStrokeLocation = glGetUniformLocation(paintProgram, "startStroke");
 
-    std::cout << "Left-drag to paint cells. Space pauses or resumes; Escape quits.\n";
+    std::cout << "Left-drag to paint. Arrow/WASD keys pan, scroll or +/- zoom. "
+                 "Space pauses; Escape quits.\n";
 
     // One iteration of this loop handles input, optionally runs GPU passes,
     // redraws the window, presents the image, and reads the next input events.
     while (glfwWindowShouldClose(window) == GLFW_FALSE) {
+        const auto frameStart = std::chrono::steady_clock::now();
+        const float deltaSeconds = std::min(
+            std::chrono::duration<float>(frameStart - lastFrame).count(), 0.1F);
+        lastFrame = frameStart;
+
         if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
             glfwSetWindowShouldClose(window, GLFW_TRUE);
+        }
+
+        const bool zoomInDown =
+            glfwGetKey(window, GLFW_KEY_EQUAL) == GLFW_PRESS ||
+            glfwGetKey(window, GLFW_KEY_KP_ADD) == GLFW_PRESS;
+        const bool zoomOutDown =
+            glfwGetKey(window, GLFW_KEY_MINUS) == GLFW_PRESS ||
+            glfwGetKey(window, GLFW_KEY_KP_SUBTRACT) == GLFW_PRESS;
+        // Key zoom is edge-triggered so holding a key doesn't repeatedly zoom.
+        if (zoomInDown && !zoomInWasDown) {
+            camera.zoom = std::min(camera.zoom * ZoomStep, MaxZoom);
+        }
+        if (zoomOutDown && !zoomOutWasDown) {
+            camera.zoom = std::max(camera.zoom / ZoomStep, MinZoom);
+        }
+        zoomInWasDown = zoomInDown;
+        zoomOutWasDown = zoomOutDown;
+
+        if (camera.scrollDelta != 0.0) {
+            // Exponentiating supports both wheel directions and multi-notch events.
+            camera.zoom = std::clamp(
+                camera.zoom * std::pow(ZoomStep, static_cast<float>(camera.scrollDelta)),
+                MinZoom, MaxZoom);
+            camera.scrollDelta = 0.0;
+        }
+
+        const float panX =
+            static_cast<float>(glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS ||
+                               glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) -
+            static_cast<float>(glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS ||
+                               glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS);
+        const float panY =
+            static_cast<float>(glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS ||
+                               glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) -
+            static_cast<float>(glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS ||
+                               glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS);
+        int framebufferWidth = 0;
+        int framebufferHeight = 0;
+        glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
+        if (framebufferWidth > 0 && framebufferHeight > 0) {
+            const ViewSize viewSize = getViewSize(framebufferWidth, framebufferHeight, camera.zoom);
+            // Scale movement to the visible area and elapsed time so panning
+            // feels consistent across zoom levels and frame rates.
+            const float panSpeed = 0.8F * deltaSeconds;
+            camera.centerX += panX * viewSize.width * panSpeed;
+            camera.centerY += panY * viewSize.height * panSpeed;
+            clampCamera(camera);
         }
 
         const bool spaceDown = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
@@ -280,45 +386,72 @@ int main() {
             if (windowWidth > 0 && windowHeight > 0 &&
                 cursorX >= 0.0 && cursorX < windowWidth &&
                 cursorY >= 0.0 && cursorY < windowHeight) {
-                // Convert GLFW's window-space cursor position to grid coordinates.
-                const int column = static_cast<int>(cursorX * GridColumns / windowWidth);
-                const int row = static_cast<int>(cursorY * GridRows / windowHeight);
-
-                glUseProgram(paintProgram);
-                bindImageTexture(0, currentTexture, GL_READ_WRITE);
-                bindImageTexture(1, strokeTexture, GL_READ_WRITE);
-                if (!strokeInitialized) {
-                    // The paint shader reads this cell to choose alive or dead for the stroke.
-                    glUniform2i(fromCellLocation, column, row);
-                    glUniform2i(toCellLocation, column, row);
-                    glUniform1ui(cellCountLocation, 1U);
-                    glUniform1ui(startStrokeLocation, 1U);
-                    // glDispatchCompute launches the compute program on the GPU.
-                    glDispatchCompute(1, 1, 1);
-                    // Wait until this image write is visible before later invocations use it.
-                    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-                    strokeInitialized = true;
-                    haveLastCell = true;
-                    lastColumn = column;
-                    lastRow = row;
-                } else {
-                    // Interpolate between sampled cursor positions so fast drags don't skip cells.
-                    const int fromColumn = haveLastCell ? lastColumn : column;
-                    const int fromRow = haveLastCell ? lastRow : row;
-                    const int steps = std::max(std::abs(column - fromColumn),
-                                               std::abs(row - fromRow));
-                    const unsigned int cellCount = static_cast<unsigned int>(steps + 1);
-                    glUniform2i(fromCellLocation, fromColumn, fromRow);
-                    glUniform2i(toCellLocation, column, row);
-                    glUniform1ui(cellCountLocation, cellCount);
-                    glUniform1ui(startStrokeLocation, 0U);
-                    glDispatchCompute((cellCount + 63U) / 64U, 1, 1);
-                    haveLastCell = true;
-                    lastColumn = column;
-                    lastRow = row;
+                int currentFramebufferWidth = 0;
+                int currentFramebufferHeight = 0;
+                glfwGetFramebufferSize(window, &currentFramebufferWidth,
+                                       &currentFramebufferHeight);
+                bool insideGrid = false;
+                int column = 0;
+                int row = 0;
+                if (currentFramebufferWidth > 0 && currentFramebufferHeight > 0) {
+                    const ViewSize viewSize = getViewSize(
+                        currentFramebufferWidth, currentFramebufferHeight, camera.zoom);
+                    const float originX = camera.centerX - viewSize.width * 0.5F;
+                    const float originY = camera.centerY - viewSize.height * 0.5F;
+                    // Convert window-space cursor coordinates through the camera
+                    // view; framebuffer/window ratios cancel for high-DPI displays.
+                    const float gridX = originX +
+                        static_cast<float>(cursorX / windowWidth) * viewSize.width;
+                    const float gridY = originY +
+                        static_cast<float>(cursorY / windowHeight) * viewSize.height;
+                    insideGrid = gridX >= 0.0F && gridX < GridColumns &&
+                                 gridY >= 0.0F && gridY < GridRows;
+                    if (insideGrid) {
+                        column = static_cast<int>(gridX);
+                        row = static_cast<int>(gridY);
+                    }
                 }
-                glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT |
-                                GL_TEXTURE_FETCH_BARRIER_BIT);
+                if (insideGrid) {
+                    glUseProgram(paintProgram);
+                    bindImageTexture(0, currentTexture, GL_READ_WRITE);
+                    bindImageTexture(1, strokeTexture, GL_READ_WRITE);
+                    if (!strokeInitialized) {
+                        // The paint shader reads this cell to choose alive or dead for the stroke.
+                        glUniform2i(fromCellLocation, column, row);
+                        glUniform2i(toCellLocation, column, row);
+                        glUniform1ui(cellCountLocation, 1U);
+                        glUniform1ui(startStrokeLocation, 1U);
+                        // glDispatchCompute launches the compute program on the GPU.
+                        glDispatchCompute(1, 1, 1);
+                        // Wait until this image write is visible before later invocations use it.
+                        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+                        strokeInitialized = true;
+                        haveLastCell = true;
+                        lastColumn = column;
+                        lastRow = row;
+                    } else {
+                        // Interpolate between sampled cursor positions so fast drags don't skip cells.
+                        const int fromColumn = haveLastCell ? lastColumn : column;
+                        const int fromRow = haveLastCell ? lastRow : row;
+                        const int steps = std::max(std::abs(column - fromColumn),
+                                                   std::abs(row - fromRow));
+                        const unsigned int cellCount = static_cast<unsigned int>(steps + 1);
+                        glUniform2i(fromCellLocation, fromColumn, fromRow);
+                        glUniform2i(toCellLocation, column, row);
+                        glUniform1ui(cellCountLocation, cellCount);
+                        glUniform1ui(startStrokeLocation, 0U);
+                        glDispatchCompute((cellCount + 63U) / 64U, 1, 1);
+                        haveLastCell = true;
+                        lastColumn = column;
+                        lastRow = row;
+                    }
+                    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT |
+                                    GL_TEXTURE_FETCH_BARRIER_BIT);
+                } else {
+                    // Don't connect a later in-grid cell to the last cell before
+                    // the cursor crossed the visible exterior.
+                    haveLastCell = false;
+                }
             } else {
                 haveLastCell = false;
             }
@@ -343,10 +476,7 @@ int main() {
             nextUpdate = now + SimulationStep;
         }
 
-        int framebufferWidth = 0;
-        int framebufferHeight = 0;
         // Framebuffer pixels can differ from window pixels on high-DPI displays.
-        glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
         // glViewport defines the output rectangle where normalized device
         // coordinates are mapped onto actual framebuffer pixels.
         glViewport(0, 0, framebufferWidth, framebufferHeight);
@@ -356,6 +486,15 @@ int main() {
 
         // Draw the current GPU state directly; no full-grid readback to the CPU is needed.
         glUseProgram(displayProgram);
+        if (framebufferWidth > 0 && framebufferHeight > 0) {
+            const ViewSize viewSize = getViewSize(
+                framebufferWidth, framebufferHeight, camera.zoom);
+            // The shader maps each fragment through this grid-space rectangle.
+            glUniform2f(viewOriginLocation,
+                        camera.centerX - viewSize.width * 0.5F,
+                        camera.centerY - viewSize.height * 0.5F);
+            glUniform2f(viewSizeLocation, viewSize.width, viewSize.height);
+        }
         // Texture unit 0 receives the state texture sampled by display.frag.
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, currentTexture);

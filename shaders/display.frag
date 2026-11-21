@@ -9,18 +9,28 @@ uniform usampler2D stateTexture;
 // Grid dimensions in columns and rows.
 uniform ivec2 gridSize;
 
+// Top-left corner and dimensions of the grid-space camera view.
+uniform vec2 viewOrigin;
+uniform vec2 viewSize;
+
 // The value used for live/white cells in the simulation data.
 uniform uint aliveState;
 
 void main() {
-    // Flip the vertical axis to match the CPU grid convention: row zero is
-    // treated as the bottom of the window.
-    vec2 gridCoordinate = vec2(textureCoordinate.x, 1.0 - textureCoordinate.y)
-                        * vec2(gridSize);
+    // Map the viewport to the camera's grid-space rectangle, flipping Y to
+    // preserve the convention that row zero is at the top of the window.
+    vec2 gridCoordinate = viewOrigin +
+        vec2(textureCoordinate.x, 1.0 - textureCoordinate.y) * viewSize;
 
-    // Integer texel coordinates identify the cell under this fragment. Clamping
-    // also keeps edge fragments from sampling outside the texture.
-    ivec2 cell = min(ivec2(gridCoordinate), gridSize - ivec2(1));
+    // The contrasting outside color makes the finite grid boundary visible.
+    if (any(lessThan(gridCoordinate, vec2(0.0))) ||
+        any(greaterThanEqual(gridCoordinate, vec2(gridSize)))) {
+        fragmentColor = vec4(0.12, 0.20, 0.30, 1.0);
+        return;
+    }
+
+    // Integer texel coordinates identify the cell under this fragment.
+    ivec2 cell = ivec2(gridCoordinate);
     uint state = texelFetch(stateTexture, cell, 0).r;
 
     // Live cells are white; dead cells are black.
