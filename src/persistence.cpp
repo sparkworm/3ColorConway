@@ -19,10 +19,8 @@ constexpr std::uint16_t FileVersion = 1;
 // Header: magic (8), version (2), dimensions (8), then three 11-byte rules.
 constexpr std::size_t BoardHeaderSize = 51;
 // Cell bits are packed row-major, least-significant bit first within each byte.
-constexpr std::size_t PackedBoardSize =
-    (static_cast<std::size_t>(GridColumns) * GridRows * 3 + 7) / 8;
-constexpr std::size_t BoardFileSize = BoardHeaderSize + PackedBoardSize;
 constexpr std::size_t MaxConfigurationSize = 64 * 1024;
+constexpr std::size_t MaxBoardSize = 128 * 1024 * 1024;
 
 struct JsonValue {
     enum class Type { Object, Array, Number, String, Other };
@@ -643,8 +641,19 @@ bool loadConfiguration(const std::string& path, RuleSet& rules,
 bool saveBoard(const std::string& path,
                const std::vector<unsigned int>& cells, const RuleSet& rules,
                std::string& error) {
+    return saveBoard(path, cells, rules, GridColumns, GridRows, error);
+}
+
+bool saveBoard(const std::string& path,
+               const std::vector<unsigned int>& cells, const RuleSet& rules,
+               int width, int height, std::string& error) {
+    if (width < 1 || height < 1 ||
+        width > 16384 || height > 16384) {
+        error = "Board dimensions are outside the supported range.";
+        return false;
+    }
     const std::size_t expectedCellCount =
-        static_cast<std::size_t>(GridColumns) * GridRows;
+        static_cast<std::size_t>(width) * height;
     if (cells.size() != expectedCellCount) {
         error = "Board dimensions do not match the current grid.";
         return false;
@@ -654,12 +663,18 @@ bool saveBoard(const std::string& path,
         return false;
     }
     std::vector<std::uint8_t> bytes;
-    bytes.reserve(BoardFileSize);
+    const std::size_t packedSize = (expectedCellCount * 3 + 7) / 8;
+    const std::size_t boardFileSize = BoardHeaderSize + packedSize;
+    if (boardFileSize > MaxBoardSize) {
+        error = "Board dimensions are too large.";
+        return false;
+    }
+    bytes.reserve(boardFileSize);
     bytes.insert(bytes.end(), BoardMagic.begin(), BoardMagic.end());
     // Multi-byte header fields are encoded little-endian for a portable format.
     appendU16(bytes, FileVersion);
-    appendU32(bytes, GridColumns);
-    appendU32(bytes, GridRows);
+    appendU32(bytes, static_cast<std::uint32_t>(width));
+    appendU32(bytes, static_cast<std::uint32_t>(height));
     // Store each rule as three signed one-byte weights and four signed 16-bit limits.
     for (const ChannelRule& rule : rules) {
         for (const int weight : rule.weights) {
@@ -675,7 +690,7 @@ bool saveBoard(const std::string& path,
         error = "Internal board header size mismatch.";
         return false;
     }
-    bytes.resize(BoardFileSize, 0);
+    bytes.resize(boardFileSize, 0);
     // Pack each row-major cell's three RGB bits consecutively into the payload.
     for (std::size_t cell = 0; cell < cells.size(); ++cell) {
         if (cells[cell] > 7U) {
@@ -691,7 +706,7 @@ bool saveBoard(const std::string& path,
             }
         }
     }
-    if (bytes.size() != BoardFileSize) {
+    if (bytes.size() != boardFileSize) {
         error = "Internal board encoding size mismatch.";
         return false;
     }
@@ -706,23 +721,63 @@ bool saveBoard(const std::string& path,
 // @return true when the complete board and rule set were loaded, otherwise false.
 bool loadBoard(const std::string& path, std::vector<unsigned int>& cells,
                RuleSet& rules, std::string& error) {
-    std::vector<std::uint8_t> bytes;
-    if (!readFile(path, BoardFileSize, bytes, error)) {
+    std::vector<unsigned int> loadedCells;
+    RuleSet loadedRules{};
+    int width = 0;
+    int height = 0;
+    if (!loadBoard(path, loadedCells, loadedRules, width, height, error)) {
         return false;
     }
-    if (bytes.size() != BoardFileSize ||
+    if (width != GridColumns || height != GridRows) {
+        error = "Board dimensions do not match the current grid.";
+        return false;
+    }
+    cells = std::move(loadedCells);
+    rules = loadedRules;
+    error.clear();
+    return true;
+}
+
+bool loadBoard(const std::string& path, std::vector<unsigned int>& cells,
+               RuleSet& rules, int& width, int& height, std::string& error) {
+    std::error_code sizeError;
+    const std::uintmax_t fileSize = std::filesystem::file_size(path, sizeError);
+    if (sizeError) {
+        error = "Could not read file size: " + sizeError.message();
+        return false;
+    }
+    if (fileSize < BoardHeaderSize || fileSize > MaxBoardSize) {
+        error = "Board file is not a supported size.";
+        return false;
+    }
+    std::vector<std::uint8_t> bytes;
+    if (!readFile(path, static_cast<std::size_t>(fileSize), bytes, error)) {
+        return false;
+    }
+    if (bytes.size() != static_cast<std::size_t>(fileSize) ||
         !std::equal(BoardMagic.begin(), BoardMagic.end(), bytes.begin())) {
         error = "Board file has an invalid signature or size.";
         return false;
     }
     std::size_t offset = BoardMagic.size();
     std::uint16_t version = 0;
-    std::uint32_t width = 0;
-    std::uint32_t height = 0;
+    std::uint32_t storedWidth = 0;
+    std::uint32_t storedHeight = 0;
     if (!readU16(bytes, offset, version) || version != FileVersion ||
-        !readU32(bytes, offset, width) || width != GridColumns ||
-        !readU32(bytes, offset, height) || height != GridRows) {
+        !readU32(bytes, offset, storedWidth) ||
+        !readU32(bytes, offset, storedHeight) ||
+        storedWidth < 1 || storedHeight < 1 ||
+        storedWidth > 16384 || storedHeight > 16384) {
         error = "Board file version or dimensions are not supported.";
+        return false;
+    }
+    width = static_cast<int>(storedWidth);
+    height = static_cast<int>(storedHeight);
+    const std::size_t expectedCellCount =
+        static_cast<std::size_t>(width) * height;
+    const std::size_t packedSize = (expectedCellCount * 3 + 7) / 8;
+    if (bytes.size() != BoardHeaderSize + packedSize) {
+        error = "Board file has an invalid payload size.";
         return false;
     }
 
@@ -769,7 +824,7 @@ bool loadBoard(const std::string& path, std::vector<unsigned int>& cells,
     // Decode into temporary state and commit both board and rules only when valid.
     // Expand each packed group of three bits into one cell state.
     std::vector<unsigned int> loadedCells(
-        static_cast<std::size_t>(GridColumns) * GridRows, DeadState);
+        expectedCellCount, DeadState);
     for (std::size_t cell = 0; cell < loadedCells.size(); ++cell) {
         unsigned int state = 0;
         for (unsigned int bit = 0; bit < 3; ++bit) {

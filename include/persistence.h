@@ -12,5 +12,10 @@ bool loadConfiguration(const std::string& path, RuleSet& rules,
 bool saveBoard(const std::string& path,
                const std::vector<unsigned int>& cells, const RuleSet& rules,
                std::string& error);
+bool saveBoard(const std::string& path,
+               const std::vector<unsigned int>& cells, const RuleSet& rules,
+               int width, int height, std::string& error);
 bool loadBoard(const std::string& path, std::vector<unsigned int>& cells,
                RuleSet& rules, std::string& error);
+bool loadBoard(const std::string& path, std::vector<unsigned int>& cells,
+               RuleSet& rules, int& width, int& height, std::string& error);

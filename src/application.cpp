@@ -37,7 +37,7 @@ int runApplication() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(800, 600, "3ColorConway", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(1280, 720, "3ColorConway", nullptr, nullptr);
     if (window == nullptr) {
         std::cerr << "Failed to create an OpenGL 4.3 window. Check that your graphics driver supports OpenGL 4.3.\n";
         glfwTerminate();
@@ -50,6 +50,8 @@ int runApplication() {
     RuleSet rules = conwayRules();
     int paintColorIndex = 6;
     Camera camera;
+    int gridColumns = GridColumns;
+    int gridRows = GridRows;
     glfwSetWindowUserPointer(window, &camera);
     glfwSetScrollCallback(window, cameraScrollCallback);
     // GLAD finds the OpenGL function pointers exposed by the graphics driver.
@@ -107,9 +109,9 @@ int runApplication() {
     }
 
     // Ping-pong textures let one pass read the current generation while writing the next.
-    std::vector<unsigned int> initialState(GridColumns * GridRows, DeadState);
-    GLuint currentTexture = createStateTexture(GridColumns, GridRows, initialState);
-    GLuint nextTexture = createStateTexture(GridColumns, GridRows, initialState);
+    std::vector<unsigned int> initialState(gridColumns * gridRows, DeadState);
+    GLuint currentTexture = createStateTexture(gridColumns, gridRows, initialState);
+    GLuint nextTexture = createStateTexture(gridColumns, gridRows, initialState);
     // This 1x1 GPU texture remembers whether the active mouse stroke paints or erases.
     const std::vector<unsigned int> initialStrokeState{DeadState};
     const GLuint strokeTexture = createStateTexture(1, 1, initialStrokeState);
@@ -123,7 +125,7 @@ int runApplication() {
     // Uniforms are per-program input values set from the CPU. Querying locations
     // once and later calling glUniform... is how data is sent into GLSL variables.
     glUseProgram(updateProgram);
-    glUniform2i(glGetUniformLocation(updateProgram, "gridSize"), GridColumns, GridRows);
+    glUniform2i(glGetUniformLocation(updateProgram, "gridSize"), gridColumns, gridRows);
     const GLint redWeightsLocation = glGetUniformLocation(updateProgram, "redWeights");
     const GLint greenWeightsLocation = glGetUniformLocation(updateProgram, "greenWeights");
     const GLint blueWeightsLocation = glGetUniformLocation(updateProgram, "blueWeights");
@@ -138,10 +140,34 @@ int runApplication() {
     const GLint paintStateLocation = glGetUniformLocation(paintProgram, "selectedState");
 
     glUseProgram(displayProgram);
-    glUniform2i(glGetUniformLocation(displayProgram, "gridSize"), GridColumns, GridRows);
+    glUniform2i(glGetUniformLocation(displayProgram, "gridSize"), gridColumns, gridRows);
     glUniform1i(glGetUniformLocation(displayProgram, "stateTexture"), 0);
     const GLint viewOriginLocation = glGetUniformLocation(displayProgram, "viewOrigin");
     const GLint viewSizeLocation = glGetUniformLocation(displayProgram, "viewSize");
+
+    auto resizeGrid = [&](int width, int height,
+                          const std::vector<unsigned int>* cells) {
+        glDeleteTextures(1, &currentTexture);
+        glDeleteTextures(1, &nextTexture);
+        gridColumns = width;
+        gridRows = height;
+        std::vector<unsigned int> state(
+            static_cast<std::size_t>(gridColumns) * gridRows, DeadState);
+        if (cells != nullptr) {
+            state = *cells;
+        }
+        currentTexture = createStateTexture(gridColumns, gridRows, state);
+        nextTexture = createStateTexture(gridColumns, gridRows, state);
+        glUseProgram(updateProgram);
+        glUniform2i(glGetUniformLocation(updateProgram, "gridSize"),
+                    gridColumns, gridRows);
+        glUseProgram(displayProgram);
+        glUniform2i(glGetUniformLocation(displayProgram, "gridSize"),
+                    gridColumns, gridRows);
+        camera.centerX = gridColumns * 0.5F;
+        camera.centerY = gridRows * 0.5F;
+        camera.zoom = 1.0F;
+    };
 
     // These variables track input transitions and the previous mouse position.
     // wasMouseDown detects a press; haveLastCell prevents a new stroke segment
@@ -154,7 +180,9 @@ int runApplication() {
     bool spaceWasDown = false;
     bool zoomInWasDown = false;
     bool zoomOutWasDown = false;
-    bool paused = false;
+    bool escapeWasDown = false;
+    bool paused = true;
+    bool started = false;
     std::array<char, 512> configurationPath{};
     std::array<char, 512> boardPath{};
     const std::string defaultConfigurationPath = "rules.json";
@@ -175,7 +203,7 @@ int runApplication() {
     const GLint startStrokeLocation = glGetUniformLocation(paintProgram, "startStroke");
 
     std::cout << "Left-drag to paint. Adjust rules in the parameter panel. "
-                 "Arrow/WASD keys pan, scroll or +/- zoom. Space pauses; Escape quits.\n";
+                 "Arrow/WASD keys pan, scroll or +/- zoom. Space pauses; Escape returns to the menu.\n";
 
     // One iteration of this loop handles input, optionally runs GPU passes,
     // redraws the window, presents the image, and reads the next input events.
@@ -184,9 +212,43 @@ int runApplication() {
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
-        const ControlPanelResult panel = drawControlPanel(
-            rules, paintColorIndex, configurationPath, boardPath,
-            fileStatus, fileStatusIsError);
+        const bool mainMenuOpen = !started;
+        ControlPanelResult panel;
+        bool captureMouse = false;
+        bool captureKeyboard = false;
+        if (mainMenuOpen) {
+            const MainMenuResult menu = drawMainMenu();
+            captureMouse = menu.captureMouse;
+            captureKeyboard = menu.captureKeyboard;
+            if (menu.startDefault) {
+                resizeGrid(menu.width, menu.height, nullptr);
+                rules = conwayRules();
+                paused = false;
+                started = true;
+            }
+            if (menu.loadBoard) {
+                std::vector<unsigned int> cells;
+                RuleSet loadedRules{};
+                int loadedWidth = 0;
+                int loadedHeight = 0;
+                std::string loadError;
+                if (loadBoard(menu.boardPath.data(), cells, loadedRules,
+                              loadedWidth, loadedHeight, loadError)) {
+                    resizeGrid(loadedWidth, loadedHeight, &cells);
+                    rules = loadedRules;
+                    paused = true;
+                    started = true;
+                } else {
+                    std::cerr << "Board load failed: " << loadError << '\n';
+                }
+            }
+        } else {
+            panel = drawControlPanel(
+                rules, paintColorIndex, configurationPath, boardPath,
+                fileStatus, fileStatusIsError);
+            captureMouse = panel.captureMouse;
+            captureKeyboard = panel.captureKeyboard;
+        }
         bool boardLoadedThisFrame = false;
         std::string fileError;
         switch (panel.fileAction) {
@@ -211,12 +273,13 @@ int runApplication() {
         }
         case FileAction::SaveBoard: {
             std::vector<unsigned int> cells(
-                static_cast<std::size_t>(GridColumns) * GridRows);
+                static_cast<std::size_t>(gridColumns) * gridRows);
             glBindTexture(GL_TEXTURE_2D, currentTexture);
             glGetTexImage(GL_TEXTURE_2D, 0, GL_RED_INTEGER, GL_UNSIGNED_INT,
                           cells.data());
             fileStatusIsError =
-                !saveBoard(panel.filePath, cells, rules, fileError);
+                !saveBoard(panel.filePath, cells, rules, gridColumns, gridRows,
+                           fileError);
             fileStatus = fileStatusIsError
                              ? "Board save failed: " + fileError
                              : "Board and rules saved: " + panel.filePath;
@@ -225,19 +288,23 @@ int runApplication() {
         case FileAction::LoadBoard: {
             std::vector<unsigned int> cells;
             RuleSet loadedRules{};
+            int loadedWidth = 0;
+            int loadedHeight = 0;
             fileStatusIsError =
-                !loadBoard(panel.filePath, cells, loadedRules, fileError);
+                !loadBoard(panel.filePath, cells, loadedRules,
+                           loadedWidth, loadedHeight, fileError);
             if (fileStatusIsError) {
                 fileStatus = "Board load failed: " + fileError;
             } else {
                 rules = loadedRules;
+                resizeGrid(loadedWidth, loadedHeight, &cells);
                 glBindTexture(GL_TEXTURE_2D, currentTexture);
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, GridColumns,
-                                GridRows, GL_RED_INTEGER, GL_UNSIGNED_INT,
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, loadedWidth,
+                                loadedHeight, GL_RED_INTEGER, GL_UNSIGNED_INT,
                                 cells.data());
                 glBindTexture(GL_TEXTURE_2D, nextTexture);
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, GridColumns,
-                                GridRows, GL_RED_INTEGER, GL_UNSIGNED_INT,
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, loadedWidth,
+                                loadedHeight, GL_RED_INTEGER, GL_UNSIGNED_INT,
                                 cells.data());
                 paused = true;
                 nextUpdate = std::chrono::steady_clock::now() + SimulationStep;
@@ -253,16 +320,26 @@ int runApplication() {
         case FileAction::None:
             break;
         }
-        const bool captureMouse = panel.captureMouse;
-
         const auto frameStart = std::chrono::steady_clock::now();
         const float deltaSeconds = std::min(
             std::chrono::duration<float>(frameStart - lastFrame).count(), 0.1F);
         lastFrame = frameStart;
 
-        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-            glfwSetWindowShouldClose(window, GLFW_TRUE);
+        const bool escapeDown =
+            glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
+        if (escapeDown && !escapeWasDown) {
+            if (started) {
+                started = false;
+                paused = true;
+                wasMouseDown = false;
+                strokeInitialized = false;
+                haveLastCell = false;
+                camera.scrollDelta = 0.0;
+            } else {
+                glfwSetWindowShouldClose(window, GLFW_TRUE);
+            }
         }
+        escapeWasDown = escapeDown;
 
         const bool zoomInDown =
             glfwGetKey(window, GLFW_KEY_EQUAL) == GLFW_PRESS ||
@@ -271,56 +348,90 @@ int runApplication() {
             glfwGetKey(window, GLFW_KEY_MINUS) == GLFW_PRESS ||
             glfwGetKey(window, GLFW_KEY_KP_SUBTRACT) == GLFW_PRESS;
         // Key zoom is edge-triggered so holding a key doesn't repeatedly zoom.
-        if (zoomInDown && !zoomInWasDown) {
-            camera.zoom = std::min(camera.zoom * ZoomStep, MaxZoom);
+        int zoomFramebufferWidth = 0;
+        int zoomFramebufferHeight = 0;
+        int zoomWindowWidth = 0;
+        int zoomWindowHeight = 0;
+        double zoomCursorX = 0.0;
+        double zoomCursorY = 0.0;
+        glfwGetFramebufferSize(window, &zoomFramebufferWidth,
+                               &zoomFramebufferHeight);
+        glfwGetWindowSize(window, &zoomWindowWidth, &zoomWindowHeight);
+        glfwGetCursorPos(window, &zoomCursorX, &zoomCursorY);
+        if (started && !captureKeyboard && !captureMouse &&
+            zoomInDown && !zoomInWasDown) {
+            zoomCameraAtCursor(
+                camera, std::min(camera.zoom * ZoomStep, MaxZoom),
+                gridColumns, gridRows,
+                zoomFramebufferWidth, zoomFramebufferHeight,
+                zoomWindowWidth, zoomWindowHeight,
+                zoomCursorX, zoomCursorY);
         }
-        if (zoomOutDown && !zoomOutWasDown) {
-            camera.zoom = std::max(camera.zoom / ZoomStep, MinZoom);
+        if (started && !captureKeyboard && !captureMouse &&
+            zoomOutDown && !zoomOutWasDown) {
+            zoomCameraAtCursor(
+                camera, std::max(camera.zoom / ZoomStep,
+                                 getMinimumZoom(gridColumns, gridRows)),
+                gridColumns, gridRows,
+                zoomFramebufferWidth, zoomFramebufferHeight,
+                zoomWindowWidth, zoomWindowHeight,
+                zoomCursorX, zoomCursorY);
         }
         zoomInWasDown = zoomInDown;
         zoomOutWasDown = zoomOutDown;
 
-        if (camera.scrollDelta != 0.0) {
+        if (started && !captureMouse && camera.scrollDelta != 0.0) {
             // Exponentiating supports both wheel directions and multi-notch events.
-            camera.zoom = std::clamp(
+            const float newZoom = std::clamp(
                 camera.zoom * std::pow(ZoomStep, static_cast<float>(camera.scrollDelta)),
-                MinZoom, MaxZoom);
+                getMinimumZoom(gridColumns, gridRows), MaxZoom);
+            zoomCameraAtCursor(
+                camera, newZoom, gridColumns, gridRows,
+                zoomFramebufferWidth, zoomFramebufferHeight,
+                zoomWindowWidth, zoomWindowHeight,
+                zoomCursorX, zoomCursorY);
             camera.scrollDelta = 0.0;
         }
 
-        const float panX =
-            static_cast<float>(glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS ||
-                               glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) -
-            static_cast<float>(glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS ||
-                               glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS);
-        const float panY =
-            static_cast<float>(glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS ||
-                               glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) -
-            static_cast<float>(glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS ||
-                               glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS);
+        const bool allowCameraInput =
+            started && !captureKeyboard && !captureMouse;
+        const float panX = allowCameraInput
+            ? static_cast<float>(glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS ||
+                                 glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) -
+              static_cast<float>(glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS ||
+                                 glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+            : 0.0F;
+        const float panY = allowCameraInput
+            ? static_cast<float>(glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS ||
+                                 glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) -
+              static_cast<float>(glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS ||
+                                 glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+            : 0.0F;
         int framebufferWidth = 0;
         int framebufferHeight = 0;
         glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
         if (framebufferWidth > 0 && framebufferHeight > 0) {
-            const ViewSize viewSize = getViewSize(framebufferWidth, framebufferHeight, camera.zoom);
+            const ViewSize viewSize = getViewSize(
+                framebufferWidth, framebufferHeight, camera.zoom);
             // Scale movement to the visible area and elapsed time so panning
             // feels consistent across zoom levels and frame rates.
             const float panSpeed = 0.8F * deltaSeconds;
             camera.centerX += panX * viewSize.width * panSpeed;
             camera.centerY += panY * viewSize.height * panSpeed;
-            clampCamera(camera);
+            clampCamera(camera, gridColumns, gridRows);
         }
 
         const bool spaceDown = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
         if (boardLoadedThisFrame) {
             paused = true;
-        } else if (spaceDown && !spaceWasDown) {
+        } else if (started && !captureKeyboard && !captureMouse &&
+                   spaceDown && !spaceWasDown) {
             paused = !paused;
             std::cout << (paused ? "Paused\n" : "Running\n");
         }
         spaceWasDown = spaceDown;
 
-        const bool mouseDown = !boardLoadedThisFrame && !captureMouse &&
+        const bool mouseDown = started && !boardLoadedThisFrame && !captureMouse &&
             glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
         if (mouseDown && !wasMouseDown) {
             // A new drag chooses its paint/erase state on the first cell it reaches.
@@ -349,7 +460,8 @@ int runApplication() {
                 int row = 0;
                 if (currentFramebufferWidth > 0 && currentFramebufferHeight > 0) {
                     const ViewSize viewSize = getViewSize(
-                        currentFramebufferWidth, currentFramebufferHeight, camera.zoom);
+                        currentFramebufferWidth, currentFramebufferHeight,
+                        camera.zoom);
                     const float originX = camera.centerX - viewSize.width * 0.5F;
                     const float originY = camera.centerY - viewSize.height * 0.5F;
                     // Convert window-space cursor coordinates through the camera
@@ -358,8 +470,8 @@ int runApplication() {
                         static_cast<float>(cursorX / windowWidth) * viewSize.width;
                     const float gridY = originY +
                         static_cast<float>(cursorY / windowHeight) * viewSize.height;
-                    insideGrid = gridX >= 0.0F && gridX < GridColumns &&
-                                 gridY >= 0.0F && gridY < GridRows;
+                    insideGrid = gridX >= 0.0F && gridX < gridColumns &&
+                                 gridY >= 0.0F && gridY < gridRows;
                     if (insideGrid) {
                         column = static_cast<int>(gridX);
                         row = static_cast<int>(gridY);
@@ -438,7 +550,8 @@ int runApplication() {
             bindImageTexture(0, currentTexture, GL_READ_ONLY);
             bindImageTexture(1, nextTexture, GL_WRITE_ONLY);
             // Rounded-up grid dimensions launch enough workgroups to cover every cell.
-            glDispatchCompute((GridColumns + 15) / 16, (GridRows + 15) / 16, 1);
+            glDispatchCompute((gridColumns + 15) / 16,
+                              (gridRows + 15) / 16, 1);
             // Make the compute writes finish before swapping textures or sampling them.
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT |
                             GL_TEXTURE_FETCH_BARRIER_BIT);

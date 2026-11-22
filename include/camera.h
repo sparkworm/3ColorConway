@@ -7,6 +7,8 @@
 constexpr float MinZoom = 0.5F;
 constexpr float MaxZoom = 8.0F;
 constexpr float ZoomStep = 1.2F;
+constexpr float ReferenceGridColumns = 256.0F;
+constexpr float ReferenceGridRows = 192.0F;
 
 struct Camera {
     float centerX = GridColumns * 0.5F;
@@ -21,5 +23,11 @@ struct ViewSize {
 };
 
 ViewSize getViewSize(int framebufferWidth, int framebufferHeight, float zoom);
-void clampCamera(Camera& camera);
+float getMinimumZoom(int gridColumns, int gridRows);
+void clampCamera(Camera& camera, int gridColumns, int gridRows);
+void zoomCameraAtCursor(Camera& camera, float newZoom,
+                        int gridColumns, int gridRows,
+                        int framebufferWidth, int framebufferHeight,
+                        int windowWidth, int windowHeight,
+                        double cursorX, double cursorY);
 void cameraScrollCallback(GLFWwindow* window, double xOffset, double yOffset);

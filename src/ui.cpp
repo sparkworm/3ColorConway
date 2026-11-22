@@ -1,5 +1,6 @@
 #include "ui.h"
 
+#include <algorithm>
 #include <array>
 #include <string>
 
@@ -9,6 +10,52 @@ constexpr std::array<const char*, 7> paintColorNames{
     "Red", "Green", "Blue", "Yellow", "Magenta", "Cyan", "White"};
 constexpr std::array<unsigned int, 7> paintColorStates{
     0b001, 0b010, 0b100, 0b011, 0b101, 0b110, WhiteState};
+}
+
+MainMenuResult drawMainMenu() {
+    MainMenuResult result;
+    const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+    ImGui::SetNextWindowPos(ImVec2(0.0F, 0.0F), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(displaySize, ImGuiCond_Always);
+    ImGui::Begin("3ColorConway", nullptr,
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoCollapse |
+                     ImGuiWindowFlags_NoSavedSettings);
+
+    ImGui::SetCursorPosY(140.0F);
+    ImGui::TextUnformatted("New project");
+    ImGui::Separator();
+    static int width = 256;
+    static int height = 192;
+    ImGui::InputInt("Width", &width, 0, 0);
+    ImGui::InputInt("Height", &height, 0, 0);
+    width = std::clamp(width, 1, 16384);
+    height = std::clamp(height, 1, 16384);
+    result.width = width;
+    result.height = height;
+    if (ImGui::Button("Start Conway")) {
+        result.startDefault = true;
+    }
+
+    ImGui::Dummy(ImVec2(0.0F, 30.0F));
+    ImGui::TextUnformatted("Existing project");
+    ImGui::Separator();
+    static std::array<char, 512> boardPath{};
+    if (boardPath[0] == '\0') {
+        const char defaultPath[] = "board.3ccb";
+        std::copy(defaultPath, defaultPath + sizeof(defaultPath),
+                  boardPath.begin());
+    }
+    ImGui::InputText("Board file", boardPath.data(), boardPath.size());
+    if (ImGui::Button("Load board + rules")) {
+        result.loadBoard = true;
+    }
+    result.boardPath = boardPath;
+    result.captureMouse = ImGui::GetIO().WantCaptureMouse;
+    result.captureKeyboard = ImGui::GetIO().WantCaptureKeyboard;
+
+    ImGui::End();
+    return result;
 }
 
 unsigned int getPaintState(int paintColorIndex) {
@@ -21,8 +68,11 @@ ControlPanelResult drawControlPanel(
     std::array<char, 512>& boardPath, const std::string& fileStatus,
     bool fileStatusIsError) {
     ControlPanelResult result;
+    const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+    const float panelWidth = std::min(420.0F, std::max(240.0F, displaySize.x - 24.0F));
+    const float panelHeight = std::max(200.0F, displaySize.y - 24.0F);
     ImGui::SetNextWindowPos(ImVec2(12.0F, 12.0F), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(420.0F, 570.0F), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(panelWidth, panelHeight), ImGuiCond_Always);
     ImGui::Begin("Color Life rules", nullptr,
                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                      ImGuiWindowFlags_NoCollapse);
@@ -112,5 +162,6 @@ ControlPanelResult drawControlPanel(
     }
     ImGui::End();
     result.captureMouse = ImGui::GetIO().WantCaptureMouse;
+    result.captureKeyboard = ImGui::GetIO().WantCaptureKeyboard;
     return result;
 }

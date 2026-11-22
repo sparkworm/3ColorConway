@@ -91,6 +91,33 @@ int main() {
         return 1;
     }
 
+    const std::filesystem::path dynamicBoardPath = directory / "dynamic.3ccb";
+    const int dynamicWidth = 17;
+    const int dynamicHeight = 11;
+    std::vector<unsigned int> dynamicCells(
+        static_cast<std::size_t>(dynamicWidth) * dynamicHeight);
+    for (std::size_t index = 0; index < dynamicCells.size(); ++index) {
+        dynamicCells[index] = static_cast<unsigned int>(index % 8);
+    }
+    if (!require(saveBoard(dynamicBoardPath.string(), dynamicCells,
+                           expectedRules, dynamicWidth, dynamicHeight, error),
+                 "Could not save dynamic board: ")) {
+        return 1;
+    }
+    std::vector<unsigned int> loadedDynamicCells;
+    int loadedWidth = 0;
+    int loadedHeight = 0;
+    loadedRules = conwayRules();
+    if (!require(loadBoard(dynamicBoardPath.string(), loadedDynamicCells,
+                           loadedRules, loadedWidth, loadedHeight, error),
+                 "Could not load dynamic board: ") ||
+        !require(loadedWidth == dynamicWidth && loadedHeight == dynamicHeight,
+                 "Dynamic board dimensions did not round-trip.") ||
+        !require(loadedDynamicCells == dynamicCells,
+                 "Dynamic board cells did not round-trip.")) {
+        return 1;
+    }
+
     {
         std::ofstream malformed(malformedPath);
         malformed << R"({"format":"3colorconway-rules","version":1,"channels":[]})";
@@ -126,6 +153,7 @@ int main() {
 
     std::filesystem::remove(configurationPath);
     std::filesystem::remove(boardPath);
+    std::filesystem::remove(dynamicBoardPath);
     std::filesystem::remove(malformedPath);
     std::filesystem::remove(truncatedPath);
     std::filesystem::remove(directory);

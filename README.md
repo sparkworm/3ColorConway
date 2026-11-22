@@ -22,10 +22,17 @@ that step needs an internet connection. The graphics driver must support OpenGL
 
 ## Controls
 
+- On startup, choose **Start Conway** to begin with the default Conway rules
+  and an adjustable board width and height, or load an existing `.3ccb` board
+  with **Load board + rules**.
 - Choose a paint color in the left panel, then left-drag to paint or erase it.
   Cells store red, green, and blue as three independent bits (`0` is empty;
   `7` is white).
-- Mouse-wheel scrolling or `+`/`-` zooms in and out; zoom ranges from 0.5x to 8x.
+- Mouse-wheel scrolling or `+`/`-` zooms in and out, with a maximum of 8x.
+  The minimum automatically lowers for larger boards so the full board remains
+  visible. Zooming keeps the grid point under the mouse pointer stationary.
+  Zoom levels use a fixed reference grid, so magnification is consistent across
+  board sizes.
 - Arrow keys or `W`/`A`/`S`/`D` pan the view. The camera stays centered over the
   grid, and the blue-gray area outside the grid marks its edges.
 - Use the left-side panel to configure each output channel independently.
@@ -42,11 +49,13 @@ that step needs an internet connection. The graphics driver must support OpenGL
   configurations (`.json`) independently, or save/load a board together with
   its associated rules (`.3ccb`). Loading a board validates the file before
   applying it and pauses the simulation; press Space to resume.
-- Escape exits.
+- Escape returns to the main menu; press Escape again from the main menu to
+  exit the application.
 
 The grid is stored as two `R32UI` textures on the GPU. `shaders/update.comp`
 applies the adjustable per-channel rules (off-grid neighbors count as empty),
 and the textures swap after each generation. `shaders/paint.comp` handles
 mouse edits; `shaders/display.vert` and `shaders/display.frag` render the RGB
-bit masks as colors. Board files use a versioned binary format with a fixed
-header for dimensions and rules, followed by row-major three-bit cell states.
+bit masks as colors. Board files use a versioned binary format with dimensions
+and rules in the header, followed by row-major three-bit cell states. Boards
+of different dimensions are supported.
