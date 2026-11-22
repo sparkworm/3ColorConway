@@ -183,6 +183,8 @@ int runApplication() {
     bool escapeWasDown = false;
     bool paused = true;
     bool started = false;
+    bool hasSimulation = false;
+    bool pausedBeforeMenu = false;
     std::array<char, 512> configurationPath{};
     std::array<char, 512> boardPath{};
     const std::string defaultConfigurationPath = "rules.json";
@@ -225,6 +227,8 @@ int runApplication() {
                 rules = conwayRules();
                 paused = false;
                 started = true;
+                hasSimulation = true;
+                pausedBeforeMenu = false;
             }
             if (menu.loadBoard) {
                 std::vector<unsigned int> cells;
@@ -238,9 +242,14 @@ int runApplication() {
                     rules = loadedRules;
                     paused = true;
                     started = true;
+                    hasSimulation = true;
+                    pausedBeforeMenu = true;
                 } else {
                     std::cerr << "Board load failed: " << loadError << '\n';
                 }
+            }
+            if (menu.quit) {
+                glfwSetWindowShouldClose(window, GLFW_TRUE);
             }
         } else {
             panel = drawControlPanel(
@@ -307,6 +316,8 @@ int runApplication() {
                                 loadedHeight, GL_RED_INTEGER, GL_UNSIGNED_INT,
                                 cells.data());
                 paused = true;
+                hasSimulation = true;
+                pausedBeforeMenu = true;
                 nextUpdate = std::chrono::steady_clock::now() + SimulationStep;
                 strokeInitialized = false;
                 haveLastCell = false;
@@ -329,6 +340,7 @@ int runApplication() {
             glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
         if (escapeDown && !escapeWasDown) {
             if (started) {
+                pausedBeforeMenu = paused;
                 started = false;
                 paused = true;
                 wasMouseDown = false;
@@ -336,7 +348,17 @@ int runApplication() {
                 haveLastCell = false;
                 camera.scrollDelta = 0.0;
             } else {
-                glfwSetWindowShouldClose(window, GLFW_TRUE);
+                if (hasSimulation) {
+                    started = true;
+                    paused = pausedBeforeMenu;
+                } else {
+                    resizeGrid(256, 192, nullptr);
+                    rules = conwayRules();
+                    started = true;
+                    paused = false;
+                    hasSimulation = true;
+                    pausedBeforeMenu = false;
+                }
             }
         }
         escapeWasDown = escapeDown;

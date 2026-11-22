@@ -50,6 +50,10 @@ MainMenuResult drawMainMenu() {
     if (ImGui::Button("Load board + rules")) {
         result.loadBoard = true;
     }
+    ImGui::Dummy(ImVec2(0.0F, 30.0F));
+    if (ImGui::Button("Quit")) {
+        result.quit = true;
+    }
     result.boardPath = boardPath;
     result.captureMouse = ImGui::GetIO().WantCaptureMouse;
     result.captureKeyboard = ImGui::GetIO().WantCaptureKeyboard;

@@ -25,6 +25,7 @@ struct ControlPanelResult {
 struct MainMenuResult {
     bool startDefault = false;
     bool loadBoard = false;
+    bool quit = false;
     bool captureMouse = false;
     bool captureKeyboard = false;
     int width = 256;

@@ -49,8 +49,9 @@ that step needs an internet connection. The graphics driver must support OpenGL
   configurations (`.json`) independently, or save/load a board together with
   its associated rules (`.3ccb`). Loading a board validates the file before
   applying it and pauses the simulation; press Space to resume.
-- Escape returns to the main menu; press Escape again from the main menu to
-  exit the application.
+- Escape returns to the main menu. Press Escape again to resume the last
+  simulation, or start a default Conway simulation if no simulation exists yet.
+  Use the **Quit** button on the main menu to exit the application.
 
 The grid is stored as two `R32UI` textures on the GPU. `shaders/update.comp`
 applies the adjustable per-channel rules (off-grid neighbors count as empty),
