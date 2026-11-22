@@ -225,10 +225,10 @@ int runApplication() {
             if (menu.startDefault) {
                 resizeGrid(menu.width, menu.height, nullptr);
                 rules = conwayRules();
-                paused = false;
+                paused = true;
                 started = true;
                 hasSimulation = true;
-                pausedBeforeMenu = false;
+                pausedBeforeMenu = true;
             }
             if (menu.loadBoard) {
                 std::vector<unsigned int> cells;
@@ -257,6 +257,16 @@ int runApplication() {
                 fileStatus, fileStatusIsError);
             captureMouse = panel.captureMouse;
             captureKeyboard = panel.captureKeyboard;
+        }
+        if (started) {
+            const PauseButtonResult pauseButton = drawPauseButton(paused);
+            captureMouse = captureMouse || pauseButton.captureMouse;
+            if (pauseButton.toggled) {
+                paused = !paused;
+                pausedBeforeMenu = paused;
+                std::cout << (paused ? "Paused\n" : "Running\n");
+                nextUpdate = std::chrono::steady_clock::now() + SimulationStep;
+            }
         }
         bool boardLoadedThisFrame = false;
         std::string fileError;
@@ -375,9 +385,9 @@ int runApplication() {
                     resizeGrid(256, 192, nullptr);
                     rules = conwayRules();
                     started = true;
-                    paused = false;
+                    paused = true;
                     hasSimulation = true;
-                    pausedBeforeMenu = false;
+                    pausedBeforeMenu = true;
                 }
             }
         }

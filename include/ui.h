@@ -34,7 +34,13 @@ struct MainMenuResult {
     std::array<char, 512> boardPath{};
 };
 
+struct PauseButtonResult {
+    bool toggled = false;
+    bool captureMouse = false;
+};
+
 MainMenuResult drawMainMenu();
+PauseButtonResult drawPauseButton(bool paused);
 
 ControlPanelResult drawControlPanel(
     RuleSet& rules, int& paintColorIndex,

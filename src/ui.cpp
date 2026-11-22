@@ -62,6 +62,24 @@ MainMenuResult drawMainMenu() {
     return result;
 }
 
+PauseButtonResult drawPauseButton(bool paused) {
+    PauseButtonResult result;
+    const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+    ImGui::SetNextWindowPos(ImVec2(displaySize.x - 92.0F, 12.0F),
+                            ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(80.0F, 44.0F), ImGuiCond_Always);
+    ImGui::Begin("Pause control", nullptr,
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+                     ImGuiWindowFlags_NoSavedSettings);
+    if (ImGui::Button(paused ? "Play" : "Pause", ImVec2(64.0F, 28.0F))) {
+        result.toggled = true;
+    }
+    ImGui::End();
+    result.captureMouse = ImGui::GetIO().WantCaptureMouse;
+    return result;
+}
+
 unsigned int getPaintState(int paintColorIndex) {
     return paintColorStates[paintColorIndex];
 }

@@ -44,7 +44,8 @@ that step needs an internet connection. The graphics driver must support OpenGL
   Conway's preset uses a weight of 1 for the channel itself, 0 for the others,
   birth score 3, and survival scores 2-3, reproducing Conway's Life when cells
   are empty or white.
-- Space pauses or resumes the simulation.
+- Use the top-right **Pause** / **Play** button or press Space to pause or resume
+  the simulation. New simulations start paused.
 - Use **Reset board** in the control panel to clear all cells while preserving
   the current board dimensions and rules. The simulation pauses after reset.
 - Expand **Save / load files** in the control panel to save or load rule
