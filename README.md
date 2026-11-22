@@ -38,10 +38,15 @@ that step needs an internet connection. The graphics driver must support OpenGL
   birth score 3, and survival scores 2-3, reproducing Conway's Life when cells
   are empty or white.
 - Space pauses or resumes the simulation.
+- Expand **Save / load files** in the control panel to save or load rule
+  configurations (`.json`) independently, or save/load a board together with
+  its associated rules (`.3ccb`). Loading a board validates the file before
+  applying it and pauses the simulation; press Space to resume.
 - Escape exits.
 
 The grid is stored as two `R32UI` textures on the GPU. `shaders/update.comp`
 applies the adjustable per-channel rules (off-grid neighbors count as empty),
 and the textures swap after each generation. `shaders/paint.comp` handles
 mouse edits; `shaders/display.vert` and `shaders/display.frag` render the RGB
-bit masks as colors.
+bit masks as colors. Board files use a versioned binary format with a fixed
+header for dimensions and rules, followed by row-major three-bit cell states.

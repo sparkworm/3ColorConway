@@ -1,6 +1,7 @@
 #include "application.h"
 
 #include "camera.h"
+#include "persistence.h"
 #include "shaders.h"
 #include "simulation.h"
 #include "ui.h"
@@ -154,6 +155,16 @@ int runApplication() {
     bool zoomInWasDown = false;
     bool zoomOutWasDown = false;
     bool paused = false;
+    std::array<char, 512> configurationPath{};
+    std::array<char, 512> boardPath{};
+    const std::string defaultConfigurationPath = "rules.json";
+    const std::string defaultBoardPath = "board.3ccb";
+    std::copy(defaultConfigurationPath.begin(), defaultConfigurationPath.end(),
+              configurationPath.begin());
+    std::copy(defaultBoardPath.begin(), defaultBoardPath.end(),
+              boardPath.begin());
+    std::string fileStatus;
+    bool fileStatusIsError = false;
     auto nextUpdate = std::chrono::steady_clock::now() + SimulationStep;
     auto lastFrame = std::chrono::steady_clock::now();
 
@@ -173,7 +184,76 @@ int runApplication() {
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
-        const bool captureMouse = drawControlPanel(rules, paintColorIndex);
+        const ControlPanelResult panel = drawControlPanel(
+            rules, paintColorIndex, configurationPath, boardPath,
+            fileStatus, fileStatusIsError);
+        bool boardLoadedThisFrame = false;
+        std::string fileError;
+        switch (panel.fileAction) {
+        case FileAction::SaveConfiguration:
+            fileStatusIsError =
+                !saveConfiguration(panel.filePath, rules, fileError);
+            fileStatus = fileStatusIsError
+                             ? "Configuration save failed: " + fileError
+                             : "Configuration saved: " + panel.filePath;
+            break;
+        case FileAction::LoadConfiguration: {
+            RuleSet loadedRules{};
+            fileStatusIsError =
+                !loadConfiguration(panel.filePath, loadedRules, fileError);
+            if (fileStatusIsError) {
+                fileStatus = "Configuration load failed: " + fileError;
+            } else {
+                rules = loadedRules;
+                fileStatus = "Configuration loaded: " + panel.filePath;
+            }
+            break;
+        }
+        case FileAction::SaveBoard: {
+            std::vector<unsigned int> cells(
+                static_cast<std::size_t>(GridColumns) * GridRows);
+            glBindTexture(GL_TEXTURE_2D, currentTexture);
+            glGetTexImage(GL_TEXTURE_2D, 0, GL_RED_INTEGER, GL_UNSIGNED_INT,
+                          cells.data());
+            fileStatusIsError =
+                !saveBoard(panel.filePath, cells, rules, fileError);
+            fileStatus = fileStatusIsError
+                             ? "Board save failed: " + fileError
+                             : "Board and rules saved: " + panel.filePath;
+            break;
+        }
+        case FileAction::LoadBoard: {
+            std::vector<unsigned int> cells;
+            RuleSet loadedRules{};
+            fileStatusIsError =
+                !loadBoard(panel.filePath, cells, loadedRules, fileError);
+            if (fileStatusIsError) {
+                fileStatus = "Board load failed: " + fileError;
+            } else {
+                rules = loadedRules;
+                glBindTexture(GL_TEXTURE_2D, currentTexture);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, GridColumns,
+                                GridRows, GL_RED_INTEGER, GL_UNSIGNED_INT,
+                                cells.data());
+                glBindTexture(GL_TEXTURE_2D, nextTexture);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, GridColumns,
+                                GridRows, GL_RED_INTEGER, GL_UNSIGNED_INT,
+                                cells.data());
+                paused = true;
+                nextUpdate = std::chrono::steady_clock::now() + SimulationStep;
+                strokeInitialized = false;
+                haveLastCell = false;
+                wasMouseDown = false;
+                boardLoadedThisFrame = true;
+                fileStatus = "Board and rules loaded; simulation paused: " +
+                             panel.filePath;
+            }
+            break;
+        }
+        case FileAction::None:
+            break;
+        }
+        const bool captureMouse = panel.captureMouse;
 
         const auto frameStart = std::chrono::steady_clock::now();
         const float deltaSeconds = std::min(
@@ -232,13 +312,15 @@ int runApplication() {
         }
 
         const bool spaceDown = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
-        if (spaceDown && !spaceWasDown) {
+        if (boardLoadedThisFrame) {
+            paused = true;
+        } else if (spaceDown && !spaceWasDown) {
             paused = !paused;
             std::cout << (paused ? "Paused\n" : "Running\n");
         }
         spaceWasDown = spaceDown;
 
-        const bool mouseDown = !captureMouse &&
+        const bool mouseDown = !boardLoadedThisFrame && !captureMouse &&
             glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
         if (mouseDown && !wasMouseDown) {
             // A new drag chooses its paint/erase state on the first cell it reaches.

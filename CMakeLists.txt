@@ -4,6 +4,8 @@ project(3ColorConway LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+include(CTest)
+
 include(FetchContent)
 # Generate and build a GLAD loader containing the OpenGL 4.3 core API.
 FetchContent_Declare(
@@ -58,6 +60,7 @@ add_executable(3ColorConway
     src/main.cpp
     src/application.cpp
     src/camera.cpp
+    src/persistence.cpp
     src/shaders.cpp
     src/simulation.cpp
     src/ui.cpp
@@ -67,6 +70,18 @@ target_link_libraries(3ColorConway PRIVATE glfw OpenGL::GL glad_gl_core_43 imgui
 target_compile_definitions(3ColorConway PRIVATE
     SHADER_DIRECTORY="${CMAKE_CURRENT_BINARY_DIR}/shaders"
 )
+
+if(BUILD_TESTING)
+    add_executable(persistence_tests
+        tests/persistence_tests.cpp
+        src/persistence.cpp
+        src/simulation.cpp
+    )
+    target_include_directories(persistence_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    )
+    add_test(NAME persistence_tests COMMAND persistence_tests)
+endif()
 
 # Copy GLSL files beside the executable so it can load them when launched from the build directory.
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/shaders")

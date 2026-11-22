@@ -15,7 +15,12 @@ unsigned int getPaintState(int paintColorIndex) {
     return paintColorStates[paintColorIndex];
 }
 
-bool drawControlPanel(RuleSet& rules, int& paintColorIndex) {
+ControlPanelResult drawControlPanel(
+    RuleSet& rules, int& paintColorIndex,
+    std::array<char, 512>& configurationPath,
+    std::array<char, 512>& boardPath, const std::string& fileStatus,
+    bool fileStatusIsError) {
+    ControlPanelResult result;
     ImGui::SetNextWindowPos(ImVec2(12.0F, 12.0F), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(420.0F, 570.0F), ImGuiCond_Always);
     ImGui::Begin("Color Life rules", nullptr,
@@ -73,6 +78,39 @@ bool drawControlPanel(RuleSet& rules, int& paintColorIndex) {
         }
         ImGui::PopID();
     }
+    if (ImGui::CollapsingHeader("Save / load files")) {
+        ImGui::InputText("Configuration file", configurationPath.data(),
+                         configurationPath.size());
+        if (ImGui::Button("Save configuration")) {
+            result.fileAction = FileAction::SaveConfiguration;
+            result.filePath = configurationPath.data();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Load configuration")) {
+            result.fileAction = FileAction::LoadConfiguration;
+            result.filePath = configurationPath.data();
+        }
+
+        ImGui::InputText("Board file", boardPath.data(), boardPath.size());
+        if (ImGui::Button("Save board + rules")) {
+            result.fileAction = FileAction::SaveBoard;
+            result.filePath = boardPath.data();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Load board + rules")) {
+            result.fileAction = FileAction::LoadBoard;
+            result.filePath = boardPath.data();
+        }
+        if (!fileStatus.empty()) {
+            if (fileStatusIsError) {
+                ImGui::TextWrapped("%s", fileStatus.c_str());
+            } else {
+                ImGui::TextColored(ImVec4(0.55F, 0.9F, 0.55F, 1.0F), "%s",
+                                   fileStatus.c_str());
+            }
+        }
+    }
     ImGui::End();
-    return ImGui::GetIO().WantCaptureMouse;
+    result.captureMouse = ImGui::GetIO().WantCaptureMouse;
+    return result;
 }
