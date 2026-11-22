@@ -15,6 +15,12 @@ uniform ivec2 gridSize;
 uniform uint deadState;
 uniform uint aliveState;
 
+// Inclusive neighbor-count bounds for death and birth.
+uniform uint maxUnderpopulation;
+uniform uint minBirth;
+uniform uint maxBirth;
+uniform uint minOverpopulation;
+
 void main() {
     // gl_GlobalInvocationID identifies this invocation's grid cell.
     ivec2 cell = ivec2(gl_GlobalInvocationID.xy);
@@ -45,7 +51,9 @@ void main() {
     }
 
     bool alive = imageLoad(currentState, cell).r == aliveState;
-    // Conway's rule: birth with three neighbors; survive with two or three.
-    bool nextAlive = liveNeighbors == 3u || (alive && liveNeighbors == 2u);
+    bool nextAlive = alive
+        ? liveNeighbors > maxUnderpopulation &&
+              liveNeighbors < minOverpopulation
+        : liveNeighbors >= minBirth && liveNeighbors <= maxBirth;
     imageStore(nextState, cell, uvec4(nextAlive ? aliveState : deadState));
 }

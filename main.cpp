@@ -3,7 +3,12 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
+#include <imgui.h>
+#include <imgui_impl_glfw.h>
+#include <imgui_impl_opengl3.h>
+
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -66,6 +71,10 @@ void clampCamera(Camera& camera) {
 }
 
 void scrollCallback(GLFWwindow* window, double, double yOffset) {
+    // Let ImGui consume wheel input while a panel control is under the cursor.
+    if (ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().WantCaptureMouse) {
+        return;
+    }
     auto* camera = static_cast<Camera*>(glfwGetWindowUserPointer(window));
     camera->scrollDelta += yOffset;
 }
@@ -207,6 +216,8 @@ int main() {
 
     // All subsequent OpenGL calls operate on this window's current context.
     glfwMakeContextCurrent(window);
+    // These are the current simulation rules; the panel edits them directly.
+    std::array<int, 4> thresholds{1, 3, 3, 4};
     Camera camera;
     glfwSetWindowUserPointer(window, &camera);
     glfwSetScrollCallback(window, scrollCallback);
@@ -214,6 +225,26 @@ int main() {
     // Calling modern OpenGL functions without loading them this way is invalid.
     if (gladLoadGL(reinterpret_cast<GLADloadfunc>(glfwGetProcAddress)) == 0) {
         std::cerr << "Failed to load OpenGL functions\n";
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return 1;
+    }
+
+    // Create ImGui after loading OpenGL so its GLFW/OpenGL backends can use the context.
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::StyleColorsDark();
+    if (!ImGui_ImplGlfw_InitForOpenGL(window, true)) {
+        std::cerr << "Failed to initialize Dear ImGui GLFW backend\n";
+        ImGui::DestroyContext();
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return 1;
+    }
+    if (!ImGui_ImplOpenGL3_Init("#version 430")) {
+        std::cerr << "Failed to initialize Dear ImGui OpenGL backend\n";
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
         glfwDestroyWindow(window);
         glfwTerminate();
         return 1;
@@ -264,6 +295,12 @@ int main() {
     glUniform2i(glGetUniformLocation(updateProgram, "gridSize"), GridColumns, GridRows);
     glUniform1ui(glGetUniformLocation(updateProgram, "deadState"), DeadState);
     glUniform1ui(glGetUniformLocation(updateProgram, "aliveState"), WhiteState);
+    const GLint maxUnderpopulationLocation =
+        glGetUniformLocation(updateProgram, "maxUnderpopulation");
+    const GLint minBirthLocation = glGetUniformLocation(updateProgram, "minBirth");
+    const GLint maxBirthLocation = glGetUniformLocation(updateProgram, "maxBirth");
+    const GLint minOverpopulationLocation =
+        glGetUniformLocation(updateProgram, "minOverpopulation");
 
     glUseProgram(paintProgram);
     glUniform1ui(glGetUniformLocation(paintProgram, "deadState"), DeadState);
@@ -297,12 +334,50 @@ int main() {
     const GLint cellCountLocation = glGetUniformLocation(paintProgram, "cellCount");
     const GLint startStrokeLocation = glGetUniformLocation(paintProgram, "startStroke");
 
-    std::cout << "Left-drag to paint. Arrow/WASD keys pan, scroll or +/- zoom. "
-                 "Space pauses; Escape quits.\n";
+    std::cout << "Left-drag to paint. Adjust rules in the parameter panel. "
+                 "Arrow/WASD keys pan, scroll or +/- zoom. Space pauses; Escape quits.\n";
 
     // One iteration of this loop handles input, optionally runs GPU passes,
     // redraws the window, presents the image, and reads the next input events.
     while (glfwWindowShouldClose(window) == GLFW_FALSE) {
+        // Start a fresh UI frame, then declare the controls that should appear this frame.
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(12.0F, 12.0F), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(320.0F, 410.0F), ImGuiCond_Always);
+        // Keep the compact settings panel fixed over the upper-left of the grid.
+        ImGui::Begin("Life parameters", nullptr,
+                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                         ImGuiWindowFlags_NoCollapse);
+        ImGui::TextUnformatted("Neighbor thresholds (0-8)");
+        ImGui::Separator();
+        // Each slider edits one rule threshold immediately; hidden IDs keep the visible labels separate.
+        ImGui::TextUnformatted("Max to die of underpopulation");
+        ImGui::SliderInt("##underpopulation", &thresholds[0], 0, 8);
+        ImGui::TextUnformatted("Min to come alive");
+        ImGui::SliderInt("##minBirth", &thresholds[1], 0, 8);
+        ImGui::TextUnformatted("Max to come alive");
+        ImGui::SliderInt("##maxBirth", &thresholds[2], 0, 8);
+        ImGui::TextUnformatted("Min to die of overpopulation");
+        ImGui::SliderInt("##overpopulation", &thresholds[3], 0, 8);
+        ImGui::Separator();
+        ImGui::TextDisabled("Standard Conway: 1, 3, 3, 4");
+        // These warnings describe bounds that make birth or survival impossible.
+        ImGui::TextWrapped(
+            "Birth uses its inclusive bounds; live cells survive strictly between the death thresholds.");
+        if (thresholds[1] > thresholds[2]) {
+            ImGui::TextColored(ImVec4(1.0F, 0.65F, 0.2F, 1.0F),
+                               "Warning: no cells can be born.");
+        }
+        if (thresholds[0] + 1 >= thresholds[3]) {
+            ImGui::TextColored(ImVec4(1.0F, 0.65F, 0.2F, 1.0F),
+                               "Warning: no live cells can survive.");
+        }
+        ImGui::End();
+        // Avoid interpreting clicks on the settings panel as cell-painting input.
+        const bool captureMouse = ImGui::GetIO().WantCaptureMouse;
+
         const auto frameStart = std::chrono::steady_clock::now();
         const float deltaSeconds = std::min(
             std::chrono::duration<float>(frameStart - lastFrame).count(), 0.1F);
@@ -366,7 +441,7 @@ int main() {
         }
         spaceWasDown = spaceDown;
 
-        const bool mouseDown =
+        const bool mouseDown = !captureMouse &&
             glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
         if (mouseDown && !wasMouseDown) {
             // A new drag chooses its paint/erase state on the first cell it reaches.
@@ -464,6 +539,15 @@ int main() {
         } else if (now >= nextUpdate) {
             // Each 16x16 workgroup updates its assigned cells; the shader bounds-checks edges.
             glUseProgram(updateProgram);
+            // Upload the current panel values when dispatching the next generation.
+            glUniform1ui(maxUnderpopulationLocation,
+                         static_cast<unsigned int>(thresholds[0]));
+            glUniform1ui(minBirthLocation,
+                         static_cast<unsigned int>(thresholds[1]));
+            glUniform1ui(maxBirthLocation,
+                         static_cast<unsigned int>(thresholds[2]));
+            glUniform1ui(minOverpopulationLocation,
+                         static_cast<unsigned int>(thresholds[3]));
             bindImageTexture(0, currentTexture, GL_READ_ONLY);
             bindImageTexture(1, nextTexture, GL_WRITE_ONLY);
             // Rounded-up grid dimensions launch enough workgroups to cover every cell.
@@ -503,6 +587,10 @@ int main() {
         // whole viewport; display.frag then looks up the corresponding grid cell.
         glDrawArrays(GL_TRIANGLES, 0, 3);
 
+        // Draw the controls after the grid so the panel appears as an overlay.
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
         // The window has a front/back framebuffer pair. Swap makes this rendered
         // frame visible, while glfwPollEvents processes keyboard and mouse input.
         glfwSwapBuffers(window);
@@ -517,6 +605,10 @@ int main() {
     glDeleteProgram(updateProgram);
     glDeleteProgram(paintProgram);
     glDeleteProgram(displayProgram);
+    // Shut down both backends and the context before destroying the GLFW window.
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
     glfwDestroyWindow(window);
     glfwTerminate();
     return 0;
