@@ -3,7 +3,7 @@
 in vec2 textureCoordinate;
 out vec4 fragmentColor;
 
-// CPU-bound unsigned-integer texture containing the two-state cell grid.
+// Unsigned-integer texture containing the RGB bit mask for each cell.
 uniform usampler2D stateTexture;
 
 // Grid dimensions in columns and rows.
@@ -12,9 +12,6 @@ uniform ivec2 gridSize;
 // Top-left corner and dimensions of the grid-space camera view.
 uniform vec2 viewOrigin;
 uniform vec2 viewSize;
-
-// The value used for live/white cells in the simulation data.
-uniform uint aliveState;
 
 void main() {
     // Map the viewport to the camera's grid-space rectangle, flipping Y to
@@ -33,10 +30,10 @@ void main() {
     ivec2 cell = ivec2(gridCoordinate);
     uint state = texelFetch(stateTexture, cell, 0).r;
 
-    // Live cells are white; dead cells are black.
-    if (state == aliveState) {
-        fragmentColor = vec4(1.0);
-    } else {
-        fragmentColor = vec4(0.0, 0.0, 0.0, 1.0);
-    }
+    // Perform bitwise logic to extract the colors
+    vec3 color = vec3(
+        float(state & 1u),
+        float((state >> 1u) & 1u),
+        float((state >> 2u) & 1u));
+    fragmentColor = vec4(color, 1.0);
 }

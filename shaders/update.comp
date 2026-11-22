@@ -11,15 +11,16 @@ layout(r32ui, binding = 1) writeonly uniform uimage2D nextState;
 // Grid dimensions in columns and rows.
 uniform ivec2 gridSize;
 
-// Integer values used by the two-state Conway simulation.
-uniform uint deadState;
-uniform uint aliveState;
+// Each row gives source-channel weights for one output channel.
+uniform ivec3 redWeights;
+uniform ivec3 greenWeights;
+uniform ivec3 blueWeights;
 
-// Inclusive neighbor-count bounds for death and birth.
-uniform uint maxUnderpopulation;
-uniform uint minBirth;
-uniform uint maxBirth;
-uniform uint minOverpopulation;
+// Inclusive weighted-score bounds, indexed by output channel.
+uniform ivec3 birthMinimum;
+uniform ivec3 birthMaximum;
+uniform ivec3 survivalMinimum;
+uniform ivec3 survivalMaximum;
 
 void main() {
     // gl_GlobalInvocationID identifies this invocation's grid cell.
@@ -31,8 +32,8 @@ void main() {
         return;
     }
 
-    // Count live orthogonal and diagonal neighbors using the Moore neighborhood.
-    uint liveNeighbors = 0u;
+    // Count each RGB bit independently in the Moore neighborhood.
+    ivec3 channelCounts = ivec3(0);
     for (int y = -1; y <= 1; ++y) {
         for (int x = -1; x <= 1; ++x) {
             // Skip the center cell because it is not one of its own neighbors.
@@ -41,19 +42,43 @@ void main() {
             }
 
             ivec2 neighbor = cell + ivec2(x, y);
-            // Off-grid neighbors count as dead.
+            // Off-grid neighbors contribute no channel bits.
             if (all(greaterThanEqual(neighbor, ivec2(0))) &&
-                all(lessThan(neighbor, gridSize)) &&
-                imageLoad(currentState, neighbor).r == aliveState) {
-                ++liveNeighbors;
+                all(lessThan(neighbor, gridSize))) {
+                uint neighborState = imageLoad(currentState, neighbor).r;
+                // Extract each color bit and add it to that channel's neighbor count.
+                channelCounts += ivec3(
+                    int(neighborState & 1u),
+                    int((neighborState >> 1u) & 1u),
+                    int((neighborState >> 2u) & 1u));
             }
         }
     }
-
-    bool alive = imageLoad(currentState, cell).r == aliveState;
-    bool nextAlive = alive
-        ? liveNeighbors > maxUnderpopulation &&
-              liveNeighbors < minOverpopulation
-        : liveNeighbors >= minBirth && liveNeighbors <= maxBirth;
-    imageStore(nextState, cell, uvec4(nextAlive ? aliveState : deadState));
+    // Apply each output channel's own weights to the red, green, and blue
+    // neighbor counts. The resulting integer scores may be negative.
+    ivec3 scores = ivec3(
+        redWeights.x * channelCounts.x + redWeights.y * channelCounts.y +
+            redWeights.z * channelCounts.z,
+        greenWeights.x * channelCounts.x + greenWeights.y * channelCounts.y +
+            greenWeights.z * channelCounts.z,
+        blueWeights.x * channelCounts.x + blueWeights.y * channelCounts.y +
+            blueWeights.z * channelCounts.z);
+    uint current = imageLoad(currentState, cell).r;
+    uint next = 0u;
+    for (int channel = 0; channel < 3; ++channel) {
+        // A channel already present must meet its survival range; an absent
+        // channel must meet its birth range. Both bounds are inclusive.
+        bool present = (current & (1u << uint(channel))) != 0u;
+        bool inRange = present
+            ? scores[channel] >= survivalMinimum[channel] &&
+                  scores[channel] <= survivalMaximum[channel]
+            : scores[channel] >= birthMinimum[channel] &&
+                  scores[channel] <= birthMaximum[channel];
+        if (inRange) {
+            // Set this channel's bit in the next cell's RGB mask.
+            next |= 1u << uint(channel);
+        }
+    }
+    // Write all three independently evaluated channels as one packed state.
+    imageStore(nextState, cell, uvec4(next));
 }

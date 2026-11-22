@@ -15,10 +15,8 @@ uniform ivec2 toCell;
 uniform uint cellCount;
 // Nonzero only for the first dispatch of a drag.
 uniform uint startStroke;
-// Integer value stored in dead grid cells.
-uniform uint deadState;
-// Integer value stored in alive grid cells.
-uniform uint aliveState;
+// RGB bit mask selected in the color picker.
+uniform uint selectedState;
 
 void main() {
     // Each invocation gets a unique horizontal index. local_size_x = 64 means
@@ -32,10 +30,10 @@ void main() {
             return;
         }
 
-        // Read the initial cell. If it is dead, paint alive; if it is alive,
-        // erase it. This makes one drag act consistently from its first cell.
+        // Paint the selected color unless the initial cell already has it.
+        // In that case, erase for the rest of the drag.
         uint currentState = imageLoad(cellStates, toCell).r;
-        uint paintState = currentState == deadState ? aliveState : deadState;
+        uint paintState = currentState == selectedState ? 0u : selectedState;
 
         // Store the chosen state in a shared 1x1 texture. Later invocations
         // read this texture, so all cells in the drag use the same state.

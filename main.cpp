@@ -29,11 +29,49 @@ constexpr float MinZoom = 0.5F;
 constexpr float MaxZoom = 8.0F;
 // Multiplicative zoom keeps wheel increments consistent at every zoom level.
 constexpr float ZoomStep = 1.2F;
-// Cell data stays in integer states. Rendering maps only this live state to
-// white and every other state to black.
+// Each state is a three-bit RGB mask; zero is empty and seven is white.
 constexpr unsigned int DeadState = 0b0000;
 constexpr unsigned int WhiteState = 0b0111;
+constexpr int MinWeight = -2;
+constexpr int MaxWeight = 2;
+constexpr int MaxRuleScore = 8 * 3 * MaxWeight;
 constexpr auto SimulationStep = std::chrono::milliseconds(100);
+
+struct ChannelRule {
+    // Weights are ordered by source channel: red, green, blue.
+    std::array<int, 3> weights{};
+    int birthMin = 3;
+    int birthMax = 3;
+    int survivalMin = 2;
+    int survivalMax = 3;
+};
+
+using RuleSet = std::array<ChannelRule, 3>;
+
+RuleSet conwayRules() {
+    RuleSet rules{};
+    for (int channel = 0; channel < 3; ++channel) {
+        rules[channel].weights[channel] = 1;
+    }
+    return rules;
+}
+
+int countMatchingNeighborhoods(const ChannelRule& rule, int minimum, int maximum) {
+    int matches = 0;
+    for (int red = 0; red <= 8; ++red) {
+        for (int green = 0; green <= 8; ++green) {
+            for (int blue = 0; blue <= 8; ++blue) {
+                const int score = rule.weights[0] * red +
+                                  rule.weights[1] * green +
+                                  rule.weights[2] * blue;
+                if (score >= minimum && score <= maximum) {
+                    ++matches;
+                }
+            }
+        }
+    }
+    return matches;
+}
 
 struct Camera {
     // The camera is centered in grid coordinates so input and rendering share
@@ -217,7 +255,13 @@ int main() {
     // All subsequent OpenGL calls operate on this window's current context.
     glfwMakeContextCurrent(window);
     // These are the current simulation rules; the panel edits them directly.
-    std::array<int, 4> thresholds{1, 3, 3, 4};
+    RuleSet rules = conwayRules();
+    constexpr std::array<const char*, 3> channelNames{"Red", "Green", "Blue"};
+    constexpr std::array<const char*, 7> paintColorNames{
+        "Red", "Green", "Blue", "Yellow", "Magenta", "Cyan", "White"};
+    constexpr std::array<unsigned int, 7> paintColorStates{
+        0b001, 0b010, 0b100, 0b011, 0b101, 0b110, WhiteState};
+    int paintColorIndex = 6;
     Camera camera;
     glfwSetWindowUserPointer(window, &camera);
     glfwSetScrollCallback(window, scrollCallback);
@@ -279,7 +323,7 @@ int main() {
     std::vector<unsigned int> initialState(GridColumns * GridRows, DeadState);
     GLuint currentTexture = createStateTexture(GridColumns, GridRows, initialState);
     GLuint nextTexture = createStateTexture(GridColumns, GridRows, initialState);
-    // This 1x1 GPU texture remembers whether the active mouse stroke paints alive or dead.
+    // This 1x1 GPU texture remembers whether the active mouse stroke paints or erases.
     const std::vector<unsigned int> initialStrokeState{DeadState};
     const GLuint strokeTexture = createStateTexture(1, 1, initialStrokeState);
 
@@ -293,23 +337,22 @@ int main() {
     // once and later calling glUniform... is how data is sent into GLSL variables.
     glUseProgram(updateProgram);
     glUniform2i(glGetUniformLocation(updateProgram, "gridSize"), GridColumns, GridRows);
-    glUniform1ui(glGetUniformLocation(updateProgram, "deadState"), DeadState);
-    glUniform1ui(glGetUniformLocation(updateProgram, "aliveState"), WhiteState);
-    const GLint maxUnderpopulationLocation =
-        glGetUniformLocation(updateProgram, "maxUnderpopulation");
-    const GLint minBirthLocation = glGetUniformLocation(updateProgram, "minBirth");
-    const GLint maxBirthLocation = glGetUniformLocation(updateProgram, "maxBirth");
-    const GLint minOverpopulationLocation =
-        glGetUniformLocation(updateProgram, "minOverpopulation");
+    const GLint redWeightsLocation = glGetUniformLocation(updateProgram, "redWeights");
+    const GLint greenWeightsLocation = glGetUniformLocation(updateProgram, "greenWeights");
+    const GLint blueWeightsLocation = glGetUniformLocation(updateProgram, "blueWeights");
+    const GLint birthMinimumLocation = glGetUniformLocation(updateProgram, "birthMinimum");
+    const GLint birthMaximumLocation = glGetUniformLocation(updateProgram, "birthMaximum");
+    const GLint survivalMinimumLocation =
+        glGetUniformLocation(updateProgram, "survivalMinimum");
+    const GLint survivalMaximumLocation =
+        glGetUniformLocation(updateProgram, "survivalMaximum");
 
     glUseProgram(paintProgram);
-    glUniform1ui(glGetUniformLocation(paintProgram, "deadState"), DeadState);
-    glUniform1ui(glGetUniformLocation(paintProgram, "aliveState"), WhiteState);
+    const GLint paintStateLocation = glGetUniformLocation(paintProgram, "selectedState");
 
     glUseProgram(displayProgram);
     glUniform2i(glGetUniformLocation(displayProgram, "gridSize"), GridColumns, GridRows);
     glUniform1i(glGetUniformLocation(displayProgram, "stateTexture"), 0);
-    glUniform1ui(glGetUniformLocation(displayProgram, "aliveState"), WhiteState);
     const GLint viewOriginLocation = glGetUniformLocation(displayProgram, "viewOrigin");
     const GLint viewSizeLocation = glGetUniformLocation(displayProgram, "viewSize");
 
@@ -345,34 +388,64 @@ int main() {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
         ImGui::SetNextWindowPos(ImVec2(12.0F, 12.0F), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(320.0F, 410.0F), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(420.0F, 570.0F), ImGuiCond_Always);
         // Keep the compact settings panel fixed over the upper-left of the grid.
-        ImGui::Begin("Life parameters", nullptr,
+        ImGui::Begin("Color Life rules", nullptr,
                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoCollapse);
-        ImGui::TextUnformatted("Neighbor thresholds (0-8)");
+        ImGui::TextUnformatted("Paint color");
+        ImGui::Combo("##paintColor", &paintColorIndex, paintColorNames.data(),
+                     static_cast<int>(paintColorNames.size()));
+        ImGui::TextWrapped("Left-drag paints the selected color; dragging on it erases it.");
         ImGui::Separator();
-        // Each slider edits one rule threshold immediately; hidden IDs keep the visible labels separate.
-        ImGui::TextUnformatted("Max to die of underpopulation");
-        ImGui::SliderInt("##underpopulation", &thresholds[0], 0, 8);
-        ImGui::TextUnformatted("Min to come alive");
-        ImGui::SliderInt("##minBirth", &thresholds[1], 0, 8);
-        ImGui::TextUnformatted("Max to come alive");
-        ImGui::SliderInt("##maxBirth", &thresholds[2], 0, 8);
-        ImGui::TextUnformatted("Min to die of overpopulation");
-        ImGui::SliderInt("##overpopulation", &thresholds[3], 0, 8);
-        ImGui::Separator();
-        ImGui::TextDisabled("Standard Conway: 1, 3, 3, 4");
-        // These warnings describe bounds that make birth or survival impossible.
-        ImGui::TextWrapped(
-            "Birth uses its inclusive bounds; live cells survive strictly between the death thresholds.");
-        if (thresholds[1] > thresholds[2]) {
-            ImGui::TextColored(ImVec4(1.0F, 0.65F, 0.2F, 1.0F),
-                               "Warning: no cells can be born.");
+        if (ImGui::Button("Conway preset")) {
+            rules = conwayRules();
         }
-        if (thresholds[0] + 1 >= thresholds[3]) {
-            ImGui::TextColored(ImVec4(1.0F, 0.65F, 0.2F, 1.0F),
-                               "Warning: no live cells can survive.");
+        ImGui::SameLine();
+        ImGui::TextDisabled("Independent B3/S23 channels");
+        ImGui::Separator();
+
+        ImGui::TextWrapped(
+            "Each output channel scores red, green, and blue neighbor counts with integer weights (-2 to 2).");
+        ImGui::TextDisabled("Each count is 0-8; score thresholds stay in -48 to 48.");
+        const char* sourceNames[] = {"Red neighbors", "Green neighbors", "Blue neighbors"};
+        for (int channel = 0; channel < 3; ++channel) {
+            ChannelRule& rule = rules[channel];
+            ImGui::PushID(channel);
+            if (ImGui::CollapsingHeader((std::string(channelNames[channel]) +
+                                         " output rule").c_str(),
+                                        channel == 0 ? ImGuiTreeNodeFlags_DefaultOpen : 0)) {
+                ImGui::TextUnformatted("Source weights");
+                for (int source = 0; source < 3; ++source) {
+                    ImGui::SliderInt(sourceNames[source], &rule.weights[source],
+                                     MinWeight, MaxWeight);
+                }
+                ImGui::TextUnformatted("Birth score range");
+                ImGui::SliderInt("Birth min", &rule.birthMin, -MaxRuleScore, MaxRuleScore);
+                ImGui::SliderInt("Birth max", &rule.birthMax, -MaxRuleScore, MaxRuleScore);
+                ImGui::TextUnformatted("Survival score range");
+                ImGui::SliderInt("Survival min", &rule.survivalMin,
+                                 -MaxRuleScore, MaxRuleScore);
+                ImGui::SliderInt("Survival max", &rule.survivalMax,
+                                 -MaxRuleScore, MaxRuleScore);
+                const int birthMatches =
+                    countMatchingNeighborhoods(rule, rule.birthMin, rule.birthMax);
+                const int survivalMatches =
+                    countMatchingNeighborhoods(rule, rule.survivalMin, rule.survivalMax);
+                ImGui::Text("Birth: %d / 729 count patterns",
+                            birthMatches);
+                ImGui::Text("Survival: %d / 729 count patterns",
+                            survivalMatches);
+                if (rule.birthMin > rule.birthMax) {
+                    ImGui::TextColored(ImVec4(1.0F, 0.65F, 0.2F, 1.0F),
+                                       "Birth range is empty.");
+                }
+                if (rule.survivalMin > rule.survivalMax) {
+                    ImGui::TextColored(ImVec4(1.0F, 0.65F, 0.2F, 1.0F),
+                                       "Survival range is empty.");
+                }
+            }
+            ImGui::PopID();
         }
         ImGui::End();
         // Avoid interpreting clicks on the settings panel as cell-painting input.
@@ -488,10 +561,11 @@ int main() {
                 }
                 if (insideGrid) {
                     glUseProgram(paintProgram);
+                    glUniform1ui(paintStateLocation, paintColorStates[paintColorIndex]);
                     bindImageTexture(0, currentTexture, GL_READ_WRITE);
                     bindImageTexture(1, strokeTexture, GL_READ_WRITE);
                     if (!strokeInitialized) {
-                        // The paint shader reads this cell to choose alive or dead for the stroke.
+                        // The paint shader reads this cell to choose paint or erase for the stroke.
                         glUniform2i(fromCellLocation, column, row);
                         glUniform2i(toCellLocation, column, row);
                         glUniform1ui(cellCountLocation, 1U);
@@ -539,15 +613,22 @@ int main() {
         } else if (now >= nextUpdate) {
             // Each 16x16 workgroup updates its assigned cells; the shader bounds-checks edges.
             glUseProgram(updateProgram);
-            // Upload the current panel values when dispatching the next generation.
-            glUniform1ui(maxUnderpopulationLocation,
-                         static_cast<unsigned int>(thresholds[0]));
-            glUniform1ui(minBirthLocation,
-                         static_cast<unsigned int>(thresholds[1]));
-            glUniform1ui(maxBirthLocation,
-                         static_cast<unsigned int>(thresholds[2]));
-            glUniform1ui(minOverpopulationLocation,
-                         static_cast<unsigned int>(thresholds[3]));
+            for (int channel = 0; channel < 3; ++channel) {
+                const ChannelRule& rule = rules[channel];
+                const GLint weightsLocation = channel == 0 ? redWeightsLocation
+                                                : channel == 1 ? greenWeightsLocation
+                                                               : blueWeightsLocation;
+                glUniform3i(weightsLocation, rule.weights[0], rule.weights[1],
+                            rule.weights[2]);
+            }
+            glUniform3i(birthMinimumLocation, rules[0].birthMin,
+                        rules[1].birthMin, rules[2].birthMin);
+            glUniform3i(birthMaximumLocation, rules[0].birthMax,
+                        rules[1].birthMax, rules[2].birthMax);
+            glUniform3i(survivalMinimumLocation, rules[0].survivalMin,
+                        rules[1].survivalMin, rules[2].survivalMin);
+            glUniform3i(survivalMaximumLocation, rules[0].survivalMax,
+                        rules[1].survivalMax, rules[2].survivalMax);
             bindImageTexture(0, currentTexture, GL_READ_ONLY);
             bindImageTexture(1, nextTexture, GL_WRITE_ONLY);
             // Rounded-up grid dimensions launch enough workgroups to cover every cell.
