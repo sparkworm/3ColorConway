@@ -8,6 +8,10 @@
 #include <vector>
 
 namespace {
+// Reports a test failure to stderr and lets the caller combine checks.
+// @param condition Whether the checked expectation passed.
+// @param message Diagnostic text to print when condition is false.
+// @return condition, allowing checks to be combined in test control flow.
 bool require(bool condition, const char* message) {
     if (!condition) {
         std::cerr << message << '\n';
@@ -16,6 +20,10 @@ bool require(bool condition, const char* message) {
     return true;
 }
 
+// Compares all persisted rule fields because RuleSet has no custom equality operator.
+// @param first First rule set to compare.
+// @param second Second rule set to compare.
+// @return true when every channel's weights and score limits match.
 bool sameRules(const RuleSet& first, const RuleSet& second) {
     for (std::size_t channel = 0; channel < first.size(); ++channel) {
         if (first[channel].weights != second[channel].weights ||
@@ -30,6 +38,8 @@ bool sameRules(const RuleSet& first, const RuleSet& second) {
 }
 }
 
+// Exercises rule and board round-trips, dimensions, and failure atomicity.
+// @return 0 when all persistence checks pass, otherwise 1.
 int main() {
     const std::filesystem::path directory =
         std::filesystem::temp_directory_path() / "3colorconway-persistence-tests";
@@ -39,6 +49,7 @@ int main() {
     const std::filesystem::path malformedPath = directory / "malformed.json";
     const std::filesystem::path truncatedPath = directory / "truncated.3ccb";
 
+    // Include negative weights and inverted ranges to cover their valid encoding.
     RuleSet expectedRules = conwayRules();
     expectedRules[0].weights = {-2, 1, 2};
     expectedRules[0].birthMin = -48;
@@ -118,6 +129,7 @@ int main() {
         return 1;
     }
 
+    // A malformed configuration must be rejected without replacing active rules.
     {
         std::ofstream malformed(malformedPath);
         malformed << R"({"format":"3colorconway-rules","version":1,"channels":[]})";
@@ -132,6 +144,7 @@ int main() {
         return 1;
     }
 
+    // A truncated board must likewise leave both caller-owned outputs untouched.
     {
         std::ifstream source(boardPath, std::ios::binary);
         std::ofstream truncated(truncatedPath, std::ios::binary);

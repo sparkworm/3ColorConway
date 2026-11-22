@@ -6,12 +6,15 @@
 
 namespace {
 constexpr std::array<const char*, 3> channelNames{"Red", "Green", "Blue"};
+// The color picker labels and cell masks are paired by their array index.
 constexpr std::array<const char*, 7> paintColorNames{
     "Red", "Green", "Blue", "Yellow", "Magenta", "Cyan", "White"};
 constexpr std::array<unsigned int, 7> paintColorStates{
     0b001, 0b010, 0b100, 0b011, 0b101, 0b110, WhiteState};
 }
 
+// Draws the initial project menu and returns its requested action and input state.
+// @return Menu selections and ImGui input-capture state for this frame.
 MainMenuResult drawMainMenu() {
     MainMenuResult result;
     const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
@@ -62,6 +65,9 @@ MainMenuResult drawMainMenu() {
     return result;
 }
 
+// Draws the compact play/pause overlay and reports button interaction.
+// @param paused Current simulation state, used to select the button label.
+// @return Button toggle state and whether the UI captures the mouse.
 PauseButtonResult drawPauseButton(bool paused) {
     PauseButtonResult result;
     const ImVec2 displaySize = ImGui::GetIO().DisplaySize;
@@ -80,10 +86,22 @@ PauseButtonResult drawPauseButton(bool paused) {
     return result;
 }
 
+// Converts the selected combo index to the cell's RGB bit mask.
+// @param paintColorIndex Index of the selected color in the paint-color table.
+// @return Three-bit mask representing the selected color.
 unsigned int getPaintState(int paintColorIndex) {
     return paintColorStates[paintColorIndex];
 }
 
+// Draws editable rules and file controls, returning application actions separately
+// from rendering so the main loop remains responsible for changing simulation state.
+// @param rules Channel rules edited directly by the controls.
+// @param paintColorIndex Selected paint color, updated by the color picker.
+// @param configurationPath Editable path buffer for rule configuration files.
+// @param boardPath Editable path buffer for board files.
+// @param fileStatus Current save/load status text to show.
+// @param fileStatusIsError Whether fileStatus represents an error.
+// @return Requested file/reset action and ImGui input-capture state.
 ControlPanelResult drawControlPanel(
     RuleSet& rules, int& paintColorIndex,
     std::array<char, 512>& configurationPath,

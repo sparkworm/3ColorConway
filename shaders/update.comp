@@ -22,6 +22,8 @@ uniform ivec3 birthMaximum;
 uniform ivec3 survivalMinimum;
 uniform ivec3 survivalMaximum;
 
+// Computes one next-generation cell per in-bounds invocation.
+// @return No value; writes the computed cell state to nextState.
 void main() {
     // gl_GlobalInvocationID identifies this invocation's grid cell.
     ivec2 cell = ivec2(gl_GlobalInvocationID.xy);

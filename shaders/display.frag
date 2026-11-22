@@ -13,6 +13,8 @@ uniform ivec2 gridSize;
 uniform vec2 viewOrigin;
 uniform vec2 viewSize;
 
+// Displays the RGB bits of the grid cell mapped to this framebuffer fragment.
+// @return No value; writes the display color for this fragment.
 void main() {
     // Map the viewport to the camera's grid-space rectangle, flipping Y to
     // preserve the convention that row zero is at the top of the window.

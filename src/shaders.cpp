@@ -4,6 +4,9 @@
 #include <iostream>
 #include <iterator>
 
+// Loads shader source as text and reports a readable path when opening fails.
+// @param path File path containing shader source.
+// @return Complete source text, or an empty string if the file cannot be opened.
 std::string readFile(const std::string& path) {
     std::ifstream file(path);
     if (!file) {
@@ -13,6 +16,11 @@ std::string readFile(const std::string& path) {
     return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
 }
 
+// Compiles shader source and returns zero after printing the driver's error log.
+// @param type OpenGL shader stage.
+// @param source GLSL source text to compile.
+// @param label Stage label included in diagnostics.
+// @return Compiled shader handle, or zero on failure.
 GLuint compileShader(GLenum type, const std::string& source, const char* label) {
     const GLuint shader = glCreateShader(type);
     const char* sourceText = source.c_str();
@@ -34,6 +42,9 @@ GLuint compileShader(GLenum type, const std::string& source, const char* label) 
     return 0;
 }
 
+// Builds a linked program, releasing intermediate shader objects on every path.
+// @param shaders Shader stage/source pairs to compile and link.
+// @return Linked program handle, or zero if compilation or linking fails.
 GLuint createProgram(const std::vector<std::pair<GLenum, std::string>>& shaders) {
     GLuint program = glCreateProgram();
     std::vector<GLuint> compiledShaders;
@@ -76,6 +87,11 @@ GLuint createProgram(const std::vector<std::pair<GLenum, std::string>>& shaders)
     return 0;
 }
 
+// Allocates an integer texture for a row-major cell grid and initializes its contents.
+// @param width Texture width in cells.
+// @param height Texture height in cells.
+// @param initialState Row-major cell values used to initialize the texture.
+// @return OpenGL texture handle.
 GLuint createStateTexture(int width, int height,
                           const std::vector<unsigned int>& initialState) {
     GLuint texture = 0;
@@ -90,6 +106,11 @@ GLuint createStateTexture(int width, int height,
     return texture;
 }
 
+// Exposes a texture as an R32UI shader image with the requested access mode.
+// @param unit Image unit to bind.
+// @param texture OpenGL texture handle to bind.
+// @param access OpenGL image access mode.
+// @return No value; changes the current image-unit binding.
 void bindImageTexture(GLuint unit, GLuint texture, GLenum access) {
     glBindImageTexture(unit, texture, 0, GL_FALSE, 0, access, GL_R32UI);
 }

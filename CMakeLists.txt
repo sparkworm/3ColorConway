@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(CTest)
 
+# Fetch the pinned third-party sources so builds use reproducible dependency versions.
 include(FetchContent)
 # Generate and build a GLAD loader containing the OpenGL 4.3 core API.
 FetchContent_Declare(
@@ -65,6 +66,7 @@ add_executable(3ColorConway
     src/simulation.cpp
     src/ui.cpp
 )
+# Keep application headers private and provide the configured runtime shader path.
 target_include_directories(3ColorConway PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(3ColorConway PRIVATE glfw OpenGL::GL glad_gl_core_43 imgui)
 target_compile_definitions(3ColorConway PRIVATE
@@ -72,6 +74,7 @@ target_compile_definitions(3ColorConway PRIVATE
 )
 
 if(BUILD_TESTING)
+    # Persistence tests link only the non-graphics code they exercise.
     add_executable(persistence_tests
         tests/persistence_tests.cpp
         src/persistence.cpp

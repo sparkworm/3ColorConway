@@ -3,6 +3,8 @@
 // Texture coordinates for display.frag; interpolated across the triangle.
 out vec2 textureCoordinate;
 
+// Generates the full-screen display triangle and its texture coordinates.
+// @return No value; writes this vertex's clip position and texture coordinate.
 void main() {
     // Generate a single oversized triangle from gl_VertexID, so no vertex buffer
     // or attribute setup is needed. It covers every pixel in the viewport.

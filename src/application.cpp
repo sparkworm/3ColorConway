@@ -23,6 +23,8 @@
 #include <utility>
 #include <vector>
 
+// Owns application startup, frame processing, rendering, and orderly shutdown.
+// @return 0 after a normal exit, or a nonzero status if startup fails.
 int runApplication() {
     // GLFW creates a window and an operating-system graphics context. OpenGL
     // calls cannot start until this initialization and context creation succeed.
@@ -145,6 +147,11 @@ int runApplication() {
     const GLint viewOriginLocation = glGetUniformLocation(displayProgram, "viewOrigin");
     const GLint viewSizeLocation = glGetUniformLocation(displayProgram, "viewSize");
 
+    // Replaces both ping-pong textures and refreshes every size-dependent GPU value.
+    // @param width New board width in columns.
+    // @param height New board height in rows.
+    // @param cells Optional row-major state to upload; null initializes an empty board.
+    // @return No value; replaces textures and resets the camera for the new grid.
     auto resizeGrid = [&](int width, int height,
                           const std::vector<unsigned int>* cells) {
         glDeleteTextures(1, &currentTexture);
@@ -218,6 +225,8 @@ int runApplication() {
         ControlPanelResult panel;
         bool captureMouse = false;
         bool captureKeyboard = false;
+        // The menu and in-simulation panel are mutually exclusive; each only
+        // returns intent, while this loop applies the requested state changes.
         if (mainMenuOpen) {
             const MainMenuResult menu = drawMainMenu();
             captureMouse = menu.captureMouse;
@@ -270,6 +279,8 @@ int runApplication() {
         }
         bool boardLoadedThisFrame = false;
         std::string fileError;
+        // Execute panel requests here so persistence and GPU updates share one
+        // state transition path regardless of which UI surface initiated a load.
         switch (panel.fileAction) {
         case FileAction::ResetBoard: {
             const std::vector<unsigned int> emptyCells(
@@ -366,6 +377,7 @@ int runApplication() {
             std::chrono::duration<float>(frameStart - lastFrame).count(), 0.1F);
         lastFrame = frameStart;
 
+        // Escape toggles the menu and remembers the run state to restore on return.
         const bool escapeDown =
             glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
         if (escapeDown && !escapeWasDown) {
@@ -393,6 +405,8 @@ int runApplication() {
         }
         escapeWasDown = escapeDown;
 
+        // Keyboard zoom is handled on press edges; wheel zoom is accumulated by
+        // the GLFW callback and consumed once per frame below.
         const bool zoomInDown =
             glfwGetKey(window, GLFW_KEY_EQUAL) == GLFW_PRESS ||
             glfwGetKey(window, GLFW_KEY_KP_ADD) == GLFW_PRESS;
@@ -483,6 +497,8 @@ int runApplication() {
         }
         spaceWasDown = spaceDown;
 
+        // Painting is disabled over UI and on a board-load frame to avoid applying
+        // stale cursor or stroke state to newly replaced textures.
         const bool mouseDown = started && !boardLoadedThisFrame && !captureMouse &&
             glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
         if (mouseDown && !wasMouseDown) {
@@ -576,6 +592,8 @@ int runApplication() {
             }
         }
 
+        // Advance at most one generation per frame; a slow frame does not trigger
+        // a catch-up burst that would make the UI temporarily unresponsive.
         const auto now = std::chrono::steady_clock::now();
         if (paused) {
             // Keep the timer current so resuming doesn't trigger a burst of missed generations.

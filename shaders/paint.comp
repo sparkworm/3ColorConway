@@ -18,6 +18,8 @@ uniform uint startStroke;
 // RGB bit mask selected in the color picker.
 uniform uint selectedState;
 
+// Applies either the first-cell stroke decision or one interpolated stroke sample.
+// @return No value; updates the cell-state image for this invocation.
 void main() {
     // Each invocation gets a unique horizontal index. local_size_x = 64 means
     // invocations are numbered consecutively within and across workgroups.

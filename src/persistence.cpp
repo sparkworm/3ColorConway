@@ -22,6 +22,7 @@ constexpr std::size_t BoardHeaderSize = 51;
 constexpr std::size_t MaxConfigurationSize = 64 * 1024;
 constexpr std::size_t MaxBoardSize = 128 * 1024 * 1024;
 
+// Minimal JSON value tree used to validate the supported rule-file schema.
 struct JsonValue {
     enum class Type { Object, Array, Number, String, Other };
     Type type = Type::Other;
@@ -31,6 +32,8 @@ struct JsonValue {
     std::map<std::string, JsonValue> object;
 };
 
+// Bounded recursive-descent parser for the JSON forms needed by rule files;
+// intentionally rejects unsupported number and non-ASCII Unicode forms.
 class JsonParser {
 public:
     // Creates a parser that reads JSON tokens from input without taking ownership.
@@ -299,7 +302,9 @@ private:
         return true;
     }
 
+    // The parser borrows its complete input for the duration of parsing.
     const std::string& input_;
+    // Cursor into input_; each parser helper advances it only as tokens are consumed.
     std::size_t position_ = 0;
 };
 
@@ -644,6 +649,14 @@ bool saveBoard(const std::string& path,
     return saveBoard(path, cells, rules, GridColumns, GridRows, error);
 }
 
+// Saves a board with explicit dimensions and its associated rule set.
+// @param path Destination board file name.
+// @param cells Row-major cell states, each represented by a three-bit RGB mask.
+// @param rules Rule set to store with the board.
+// @param width Board width in columns.
+// @param height Board height in rows.
+// @param error Receives the failure reason; cleared when saving succeeds.
+// @return true when the complete board is written, otherwise false.
 bool saveBoard(const std::string& path,
                const std::vector<unsigned int>& cells, const RuleSet& rules,
                int width, int height, std::string& error) {
@@ -738,6 +751,14 @@ bool loadBoard(const std::string& path, std::vector<unsigned int>& cells,
     return true;
 }
 
+// Loads a dimensioned board and commits outputs only after full validation.
+// @param path Board file name to read.
+// @param cells Receives row-major decoded cell states on success.
+// @param rules Receives the associated validated rules on success.
+// @param width Receives the stored board width in columns on success.
+// @param height Receives the stored board height in rows on success.
+// @param error Receives the failure reason; cleared when loading succeeds.
+// @return true when the complete board and rule set were loaded, otherwise false.
 bool loadBoard(const std::string& path, std::vector<unsigned int>& cells,
                RuleSet& rules, int& width, int& height, std::string& error) {
     std::error_code sizeError;
