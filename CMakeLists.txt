@@ -54,7 +54,15 @@ target_include_directories(imgui PUBLIC
 )
 target_link_libraries(imgui PUBLIC glfw OpenGL::GL)
 
-add_executable(3ColorConway main.cpp)
+add_executable(3ColorConway
+    src/main.cpp
+    src/application.cpp
+    src/camera.cpp
+    src/shaders.cpp
+    src/simulation.cpp
+    src/ui.cpp
+)
+target_include_directories(3ColorConway PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(3ColorConway PRIVATE glfw OpenGL::GL glad_gl_core_43 imgui)
 target_compile_definitions(3ColorConway PRIVATE
     SHADER_DIRECTORY="${CMAKE_CURRENT_BINARY_DIR}/shaders"

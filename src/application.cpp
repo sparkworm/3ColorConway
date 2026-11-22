@@ -1,3 +1,10 @@
+#include "application.h"
+
+#include "camera.h"
+#include "shaders.h"
+#include "simulation.h"
+#include "ui.h"
+
 #include <glad/gl.h>
 
 #define GLFW_INCLUDE_NONE
@@ -8,230 +15,14 @@
 #include <imgui_impl_opengl3.h>
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cmath>
-#include <cstdlib>
-#include <fstream>
 #include <iostream>
-#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
 
-namespace {
-
-// The simulation is a fixed 256-by-192 grid. These dimensions are also sent
-// to the shaders so they can work in grid coordinates instead of pixels.
-constexpr int GridColumns = 256;
-constexpr int GridRows = 192;
-constexpr float MinZoom = 0.5F;
-constexpr float MaxZoom = 8.0F;
-// Multiplicative zoom keeps wheel increments consistent at every zoom level.
-constexpr float ZoomStep = 1.2F;
-// Each state is a three-bit RGB mask; zero is empty and seven is white.
-constexpr unsigned int DeadState = 0b0000;
-constexpr unsigned int WhiteState = 0b0111;
-constexpr int MinWeight = -2;
-constexpr int MaxWeight = 2;
-constexpr int MaxRuleScore = 8 * 3 * MaxWeight;
-constexpr auto SimulationStep = std::chrono::milliseconds(100);
-
-struct ChannelRule {
-    // Weights are ordered by source channel: red, green, blue.
-    std::array<int, 3> weights{};
-    int birthMin = 3;
-    int birthMax = 3;
-    int survivalMin = 2;
-    int survivalMax = 3;
-};
-
-using RuleSet = std::array<ChannelRule, 3>;
-
-RuleSet conwayRules() {
-    RuleSet rules{};
-    for (int channel = 0; channel < 3; ++channel) {
-        rules[channel].weights[channel] = 1;
-    }
-    return rules;
-}
-
-int countMatchingNeighborhoods(const ChannelRule& rule, int minimum, int maximum) {
-    int matches = 0;
-    for (int red = 0; red <= 8; ++red) {
-        for (int green = 0; green <= 8; ++green) {
-            for (int blue = 0; blue <= 8; ++blue) {
-                const int score = rule.weights[0] * red +
-                                  rule.weights[1] * green +
-                                  rule.weights[2] * blue;
-                if (score >= minimum && score <= maximum) {
-                    ++matches;
-                }
-            }
-        }
-    }
-    return matches;
-}
-
-struct Camera {
-    // The camera is centered in grid coordinates so input and rendering share
-    // the same mapping regardless of window size or framebuffer scale.
-    float centerX = GridColumns * 0.5F;
-    float centerY = GridRows * 0.5F;
-    float zoom = 1.0F;
-    // GLFW callbacks run during event polling; accumulate wheel movement here
-    // and apply it in the main loop alongside keyboard input.
-    double scrollDelta = 0.0;
-};
-
-struct ViewSize {
-    float width;
-    float height;
-};
-
-ViewSize getViewSize(int framebufferWidth, int framebufferHeight, float zoom) {
-    // Fit the whole grid without stretching it, then scale the visible
-    // grid-space dimensions inversely with zoom.
-    const float fitScale = std::min(
-        static_cast<float>(framebufferWidth) / GridColumns,
-        static_cast<float>(framebufferHeight) / GridRows);
-    return {
-        static_cast<float>(framebufferWidth) / (fitScale * zoom),
-        static_cast<float>(framebufferHeight) / (fitScale * zoom),
-    };
-}
-
-void clampCamera(Camera& camera) {
-    // Keeping the center within the finite grid guarantees that some part of
-    // the grid remains visible, even when the viewport is larger than it.
-    camera.centerX = std::clamp(camera.centerX, 0.0F, static_cast<float>(GridColumns));
-    camera.centerY = std::clamp(camera.centerY, 0.0F, static_cast<float>(GridRows));
-}
-
-void scrollCallback(GLFWwindow* window, double, double yOffset) {
-    // Let ImGui consume wheel input while a panel control is under the cursor.
-    if (ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().WantCaptureMouse) {
-        return;
-    }
-    auto* camera = static_cast<Camera*>(glfwGetWindowUserPointer(window));
-    camera->scrollDelta += yOffset;
-}
-
-// Read a shader source file as text. OpenGL's shader functions receive source
-// code as text and do not open files themselves.
-std::string readFile(const std::string& path) {
-    std::ifstream file(path);
-    if (!file) {
-        std::cerr << "Could not open shader file: " << path << '\n';
-        return {};
-    }
-
-    return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
-}
-
-// Create and compile one shader stage. A return value of zero means the
-// compilation failed; otherwise the number is an OpenGL shader object handle.
-GLuint compileShader(GLenum type, const std::string& source, const char* label) {
-    // glCreateShader creates an empty shader object of the requested stage.
-    const GLuint shader = glCreateShader(type);
-    const char* sourceText = source.c_str();
-    // Upload the source text, then ask the driver to compile it.
-    glShaderSource(shader, 1, &sourceText, nullptr);
-    glCompileShader(shader);
-
-    // Shader objects have queryable properties; here we check compile status.
-    GLint success = GL_FALSE;
-    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
-    if (success == GL_TRUE) {
-        return shader;
-    }
-
-    GLint logLength = 0;
-    glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLength);
-    std::string log(static_cast<std::size_t>(logLength), '\0');
-    glGetShaderInfoLog(shader, logLength, nullptr, log.data());
-    std::cerr << "Failed to compile " << label << " shader:\n" << log << '\n';
-    glDeleteShader(shader);
-    return 0;
-}
-
-// Combine vertex/fragment or compute shader stages into one usable program.
-GLuint createProgram(const std::vector<std::pair<GLenum, std::string>>& shaders) {
-    // A program is a linkable collection of compiled shader stages.
-    GLuint program = glCreateProgram();
-    std::vector<GLuint> compiledShaders;
-
-    for (const auto& [type, source] : shaders) {
-        const GLuint shader = compileShader(type, source, type == GL_COMPUTE_SHADER
-                                                              ? "compute"
-                                                              : type == GL_VERTEX_SHADER
-                                                                    ? "vertex"
-                                                                    : "fragment");
-        if (shader == 0) {
-            for (const GLuint compiled : compiledShaders) {
-                glDeleteShader(compiled);
-            }
-            glDeleteProgram(program);
-            return 0;
-        }
-
-        glAttachShader(program, shader);
-        compiledShaders.push_back(shader);
-    }
-
-    // Linking resolves stage interfaces and prepares the program for execution.
-    glLinkProgram(program);
-    GLint success = GL_FALSE;
-    glGetProgramiv(program, GL_LINK_STATUS, &success);
-    for (const GLuint shader : compiledShaders) {
-        glDeleteShader(shader);
-    }
-
-    if (success == GL_TRUE) {
-        return program;
-    }
-
-    GLint logLength = 0;
-    glGetProgramiv(program, GL_INFO_LOG_LENGTH, &logLength);
-    std::string log(static_cast<std::size_t>(logLength), '\0');
-    glGetProgramInfoLog(program, logLength, nullptr, log.data());
-    std::cerr << "Failed to link shader program:\n" << log << '\n';
-    glDeleteProgram(program);
-    return 0;
-}
-
-// Allocate a 2D integer texture that stores one unsigned integer per cell.
-// Textures are GPU objects whose lifetime and contents are managed by OpenGL.
-GLuint createStateTexture(int width, int height,
-                          const std::vector<unsigned int>& initialState) {
-    GLuint texture = 0;
-    // A generated texture handle is the identifier used by later gl* calls.
-    glGenTextures(1, &texture);
-    // Binding makes this texture the active target of subsequent texture calls.
-    glBindTexture(GL_TEXTURE_2D, texture);
-    // Nearest filtering keeps the grid cells crisp when the texture is enlarged.
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    // Clamp coordinates at the edge; the simulation shader handles neighbors
-    // itself, so off-grid reads should not wrap around the grid.
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    // GL_R32UI means red channel, 32-bit unsigned integer. Uploading CPU memory
-    // performs the one-time copy from std::vector into GPU texture storage.
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32UI, width, height, 0,
-                 GL_RED_INTEGER, GL_UNSIGNED_INT, initialState.data());
-    return texture;
-}
-
-// Bind a texture as a shader image. Compute shaders use image units for reads
-// and writes; the access mode documents whether this pass can load or store.
-void bindImageTexture(GLuint unit, GLuint texture, GLenum access) {
-    glBindImageTexture(unit, texture, 0, GL_FALSE, 0, access, GL_R32UI);
-}
-
-} // namespace
-
-int main() {
+int runApplication() {
     // GLFW creates a window and an operating-system graphics context. OpenGL
     // calls cannot start until this initialization and context creation succeed.
     if (glfwInit() == GLFW_FALSE) {
@@ -256,15 +47,10 @@ int main() {
     glfwMakeContextCurrent(window);
     // These are the current simulation rules; the panel edits them directly.
     RuleSet rules = conwayRules();
-    constexpr std::array<const char*, 3> channelNames{"Red", "Green", "Blue"};
-    constexpr std::array<const char*, 7> paintColorNames{
-        "Red", "Green", "Blue", "Yellow", "Magenta", "Cyan", "White"};
-    constexpr std::array<unsigned int, 7> paintColorStates{
-        0b001, 0b010, 0b100, 0b011, 0b101, 0b110, WhiteState};
     int paintColorIndex = 6;
     Camera camera;
     glfwSetWindowUserPointer(window, &camera);
-    glfwSetScrollCallback(window, scrollCallback);
+    glfwSetScrollCallback(window, cameraScrollCallback);
     // GLAD finds the OpenGL function pointers exposed by the graphics driver.
     // Calling modern OpenGL functions without loading them this way is invalid.
     if (gladLoadGL(reinterpret_cast<GLADloadfunc>(glfwGetProcAddress)) == 0) {
@@ -387,69 +173,7 @@ int main() {
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
-        ImGui::SetNextWindowPos(ImVec2(12.0F, 12.0F), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(420.0F, 570.0F), ImGuiCond_Always);
-        // Keep the compact settings panel fixed over the upper-left of the grid.
-        ImGui::Begin("Color Life rules", nullptr,
-                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-                         ImGuiWindowFlags_NoCollapse);
-        ImGui::TextUnformatted("Paint color");
-        ImGui::Combo("##paintColor", &paintColorIndex, paintColorNames.data(),
-                     static_cast<int>(paintColorNames.size()));
-        ImGui::TextWrapped("Left-drag paints the selected color; dragging on it erases it.");
-        ImGui::Separator();
-        if (ImGui::Button("Conway preset")) {
-            rules = conwayRules();
-        }
-        ImGui::SameLine();
-        ImGui::TextDisabled("Independent B3/S23 channels");
-        ImGui::Separator();
-
-        ImGui::TextWrapped(
-            "Each output channel scores red, green, and blue neighbor counts with integer weights (-2 to 2).");
-        ImGui::TextDisabled("Each count is 0-8; score thresholds stay in -48 to 48.");
-        const char* sourceNames[] = {"Red neighbors", "Green neighbors", "Blue neighbors"};
-        for (int channel = 0; channel < 3; ++channel) {
-            ChannelRule& rule = rules[channel];
-            ImGui::PushID(channel);
-            if (ImGui::CollapsingHeader((std::string(channelNames[channel]) +
-                                         " output rule").c_str(),
-                                        channel == 0 ? ImGuiTreeNodeFlags_DefaultOpen : 0)) {
-                ImGui::TextUnformatted("Source weights");
-                for (int source = 0; source < 3; ++source) {
-                    ImGui::SliderInt(sourceNames[source], &rule.weights[source],
-                                     MinWeight, MaxWeight);
-                }
-                ImGui::TextUnformatted("Birth score range");
-                ImGui::SliderInt("Birth min", &rule.birthMin, -MaxRuleScore, MaxRuleScore);
-                ImGui::SliderInt("Birth max", &rule.birthMax, -MaxRuleScore, MaxRuleScore);
-                ImGui::TextUnformatted("Survival score range");
-                ImGui::SliderInt("Survival min", &rule.survivalMin,
-                                 -MaxRuleScore, MaxRuleScore);
-                ImGui::SliderInt("Survival max", &rule.survivalMax,
-                                 -MaxRuleScore, MaxRuleScore);
-                const int birthMatches =
-                    countMatchingNeighborhoods(rule, rule.birthMin, rule.birthMax);
-                const int survivalMatches =
-                    countMatchingNeighborhoods(rule, rule.survivalMin, rule.survivalMax);
-                ImGui::Text("Birth: %d / 729 count patterns",
-                            birthMatches);
-                ImGui::Text("Survival: %d / 729 count patterns",
-                            survivalMatches);
-                if (rule.birthMin > rule.birthMax) {
-                    ImGui::TextColored(ImVec4(1.0F, 0.65F, 0.2F, 1.0F),
-                                       "Birth range is empty.");
-                }
-                if (rule.survivalMin > rule.survivalMax) {
-                    ImGui::TextColored(ImVec4(1.0F, 0.65F, 0.2F, 1.0F),
-                                       "Survival range is empty.");
-                }
-            }
-            ImGui::PopID();
-        }
-        ImGui::End();
-        // Avoid interpreting clicks on the settings panel as cell-painting input.
-        const bool captureMouse = ImGui::GetIO().WantCaptureMouse;
+        const bool captureMouse = drawControlPanel(rules, paintColorIndex);
 
         const auto frameStart = std::chrono::steady_clock::now();
         const float deltaSeconds = std::min(
@@ -561,7 +285,7 @@ int main() {
                 }
                 if (insideGrid) {
                     glUseProgram(paintProgram);
-                    glUniform1ui(paintStateLocation, paintColorStates[paintColorIndex]);
+                    glUniform1ui(paintStateLocation, getPaintState(paintColorIndex));
                     bindImageTexture(0, currentTexture, GL_READ_WRITE);
                     bindImageTexture(1, strokeTexture, GL_READ_WRITE);
                     if (!strokeInitialized) {
