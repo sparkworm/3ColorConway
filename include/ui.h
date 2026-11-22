@@ -9,6 +9,7 @@
 
 enum class FileAction {
     None,
+    ResetBoard,
     SaveConfiguration,
     LoadConfiguration,
     SaveBoard,

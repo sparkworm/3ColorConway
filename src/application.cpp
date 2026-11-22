@@ -261,6 +261,26 @@ int runApplication() {
         bool boardLoadedThisFrame = false;
         std::string fileError;
         switch (panel.fileAction) {
+        case FileAction::ResetBoard: {
+            const std::vector<unsigned int> emptyCells(
+                static_cast<std::size_t>(gridColumns) * gridRows, DeadState);
+            glBindTexture(GL_TEXTURE_2D, currentTexture);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, gridColumns, gridRows,
+                            GL_RED_INTEGER, GL_UNSIGNED_INT, emptyCells.data());
+            glBindTexture(GL_TEXTURE_2D, nextTexture);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, gridColumns, gridRows,
+                            GL_RED_INTEGER, GL_UNSIGNED_INT, emptyCells.data());
+            paused = true;
+            pausedBeforeMenu = true;
+            nextUpdate = std::chrono::steady_clock::now() + SimulationStep;
+            strokeInitialized = false;
+            haveLastCell = false;
+            wasMouseDown = false;
+            boardLoadedThisFrame = true;
+            fileStatus = "Board cleared; board size and rules preserved.";
+            fileStatusIsError = false;
+            break;
+        }
         case FileAction::SaveConfiguration:
             fileStatusIsError =
                 !saveConfiguration(panel.filePath, rules, fileError);

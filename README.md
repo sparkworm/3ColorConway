@@ -45,6 +45,8 @@ that step needs an internet connection. The graphics driver must support OpenGL
   birth score 3, and survival scores 2-3, reproducing Conway's Life when cells
   are empty or white.
 - Space pauses or resumes the simulation.
+- Use **Reset board** in the control panel to clear all cells while preserving
+  the current board dimensions and rules. The simulation pauses after reset.
 - Expand **Save / load files** in the control panel to save or load rule
   configurations (`.json`) independently, or save/load a board together with
   its associated rules (`.3ccb`). Loading a board validates the file before

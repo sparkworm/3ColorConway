@@ -85,11 +85,15 @@ ControlPanelResult drawControlPanel(
                  static_cast<int>(paintColorNames.size()));
     ImGui::TextWrapped("Left-drag paints the selected color; dragging on it erases it.");
     ImGui::Separator();
+    
+    if (ImGui::Button("Reset board")) {
+        result.fileAction = FileAction::ResetBoard;
+    }
+    ImGui::SameLine();
     if (ImGui::Button("Conway preset")) {
         rules = conwayRules();
     }
-    ImGui::SameLine();
-    ImGui::TextDisabled("Independent B3/S23 channels");
+
     ImGui::Separator();
 
     ImGui::TextWrapped(
